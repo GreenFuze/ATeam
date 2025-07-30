@@ -1,0 +1,93 @@
+# ATeam LLM Models Configuration
+# This file defines the available LLM models and their capabilities
+
+models:
+  # OpenAI Models
+  gpt-4:
+    name: "GPT-4"
+    provider: "openai"
+    supports_schema: true
+    supports_grammar: true
+    max_tokens: 8192
+    description: "OpenAI's most capable model for complex reasoning tasks"
+    
+  gpt-4-turbo:
+    name: "GPT-4 Turbo"
+    provider: "openai"
+    supports_schema: true
+    supports_grammar: true
+    max_tokens: 128000
+    description: "Latest GPT-4 model with improved performance and larger context"
+    
+  gpt-3.5-turbo:
+    name: "GPT-3.5 Turbo"
+    provider: "openai"
+    supports_schema: false
+    supports_grammar: false
+    max_tokens: 4096
+    description: "Fast and efficient model for most tasks"
+    
+  # Anthropic Models
+  claude-3-opus:
+    name: "Claude 3 Opus"
+    provider: "anthropic"
+    supports_schema: true
+    supports_grammar: false
+    max_tokens: 200000
+    description: "Anthropic's most capable model for complex reasoning"
+    
+  claude-3-sonnet:
+    name: "Claude 3 Sonnet"
+    provider: "anthropic"
+    supports_schema: true
+    supports_grammar: false
+    max_tokens: 200000
+    description: "Balanced performance and speed for most tasks"
+    
+  claude-3-haiku:
+    name: "Claude 3 Haiku"
+    provider: "anthropic"
+    supports_schema: false
+    supports_grammar: false
+    max_tokens: 200000
+    description: "Fast and cost-effective model for simple tasks"
+    
+  # Local Models
+  llama-3.1-8b:
+    name: "Llama 3.1 8B"
+    provider: "local"
+    supports_schema: false
+    supports_grammar: false
+    max_tokens: 8192
+    description: "Local Llama model for privacy-sensitive tasks"
+    
+  llama-3.1-70b:
+    name: "Llama 3.1 70B"
+    provider: "local"
+    supports_schema: false
+    supports_grammar: false
+    max_tokens: 8192
+    description: "Large local Llama model for complex reasoning"
+    
+  # Google Models
+  gemini-pro:
+    name: "Gemini Pro"
+    provider: "google"
+    supports_schema: true
+    supports_grammar: false
+    max_tokens: 32768
+    description: "Google's advanced reasoning model"
+    
+  gemini-flash:
+    name: "Gemini Flash"
+    provider: "google"
+    supports_schema: false
+    supports_grammar: false
+    max_tokens: 32768
+    description: "Fast and efficient Google model"
+
+# Default model configuration
+defaults:
+  model: "gpt-4-turbo"
+  temperature: 0.7
+  max_tokens: 4096

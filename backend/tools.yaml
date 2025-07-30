@@ -1,0 +1,27 @@
+tools:
+  - name: "calculator"
+    description: "Perform mathematical calculations"
+    parameters:
+      expression:
+        type: "string"
+        required: true
+        description: "Mathematical expression to evaluate"
+    file_path: null
+
+  - name: "web_search"
+    description: "Search the web for information"
+    parameters:
+      query:
+        type: "string"
+        required: true
+        description: "Search query"
+    file_path: null
+
+  - name: "file_reader"
+    description: "Read contents of a file"
+    parameters:
+      file_path:
+        type: "string"
+        required: true
+        description: "Path to the file to read"
+    file_path: null

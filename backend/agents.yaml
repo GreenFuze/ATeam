@@ -1,0 +1,19 @@
+agents:
+- created_at: '2025-07-28T22:05:59.997382'
+  description: The master agent that can create other agents and manage the system
+  enable_scratchpad: true
+  enable_summarization: true
+  grammar_file: null
+  id: god
+  max_tokens: null
+  model: llama-3.1-8b
+  name: God
+  prompts:
+  - god_system.md
+  - create_agent.md
+  schema_file: null
+  temperature: 0.7
+  tools:
+  - CreateAgent
+  - CreateTool
+  updated_at: '2025-07-30T10:06:11.361127'

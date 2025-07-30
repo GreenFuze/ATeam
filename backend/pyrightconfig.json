@@ -1,0 +1,12 @@
+{
+  "include": [
+    "."
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/static"
+  ],
+  "pythonVersion": "3.12",
+  "pythonPlatform": "All"
+}

@@ -1,0 +1,28 @@
+providers:
+  - name: "openai"
+    display_name: "OpenAI"
+    description: "OpenAI's language models"
+    api_key_required: true
+    api_key_env_var: "DONT_USE_OPENAI_API_KEY"
+    base_url: "https://api.openai.com/v1"
+
+  - name: "anthropic"
+    display_name: "Anthropic"
+    description: "Anthropic's Claude models"
+    api_key_required: true
+    api_key_env_var: "ANTHROPIC_API_KEY"
+    base_url: "https://api.anthropic.com"
+
+  - name: "google"
+    display_name: "Google"
+    description: "Google's Gemini models"
+    api_key_required: true
+    api_key_env_var: "GOOGLE_API_KEY"
+    base_url: "https://generativelanguage.googleapis.com"
+
+  - name: "local"
+    display_name: "Local Models"
+    description: "Locally hosted models"
+    api_key_required: false
+    api_key_env_var: null
+    base_url: "http://localhost:11434"
