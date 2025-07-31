@@ -1,5 +1,6 @@
 import React from 'react';
-import { Modal, Text, Badge, Code, ScrollArea } from '@mantine/core';
+import { Modal, Text, Badge, Code, Group, Tooltip, Card } from '@mantine/core';
+import { IconAlertTriangle } from '@tabler/icons-react';
 import { ToolConfig } from '../types';
 
 interface ToolViewerProps {
@@ -10,26 +11,6 @@ interface ToolViewerProps {
 
 const ToolViewer: React.FC<ToolViewerProps> = ({ tool, isOpen, onClose }) => {
   if (!tool) return null;
-
-  const getToolType = (tool: ToolConfig) => {
-    if (tool.is_provider_tool) {
-      return 'Provider Tool';
-    }
-    if (['CreateAgent', 'CreateTool'].includes(tool.name)) {
-      return 'System Tool';
-    }
-    return 'User Tool';
-  };
-
-  const getToolTypeColor = (tool: ToolConfig) => {
-    if (tool.is_provider_tool) {
-      return 'purple';
-    }
-    if (['CreateAgent', 'CreateTool'].includes(tool.name)) {
-      return 'blue';
-    }
-    return 'green';
-  };
 
   return (
     <Modal
@@ -46,90 +27,82 @@ const ToolViewer: React.FC<ToolViewerProps> = ({ tool, isOpen, onClose }) => {
             <Text size="lg" fw={600}>
               {tool.name}
             </Text>
-            <Badge color={getToolTypeColor(tool)}>
-              {getToolType(tool)}
-            </Badge>
+            <Group gap="xs">
+              <Badge color={tool.type === 'function' ? 'blue' : 'green'}>
+                {tool.type}
+              </Badge>
+              {!tool.has_docstring && (
+                <Tooltip label="Missing docstring - add a description for this tool">
+                  <IconAlertTriangle size={16} color="orange" />
+                </Tooltip>
+              )}
+            </Group>
           </div>
           <Text color="dimmed" size="sm">
-            {tool.description}
+            {tool.description || 'No description available'}
           </Text>
         </div>
 
+        {/* Function Signature */}
+        {tool.type === 'function' && tool.signature && (
+          <div>
+            <Text size="sm" fw={500} className="mb-1">
+              Signature
+            </Text>
+            <Code>{tool.name}{tool.signature}</Code>
+          </div>
+        )}
+
         {/* Tool Details */}
         <div className="space-y-4">
-          {tool.provider && (
-            <div>
-              <Text size="sm" fw={500} className="mb-1">
-                Provider
-              </Text>
-              <Text size="sm">{tool.provider}</Text>
-            </div>
-          )}
+          <div>
+            <Text size="sm" fw={500} className="mb-1">
+              File Path
+            </Text>
+            <Code className="text-xs">{tool.file_path}</Code>
+          </div>
 
-          {tool.file_path && (
-            <div>
-              <Text size="sm" fw={500} className="mb-1">
-                File Path
-              </Text>
-              <Code className="text-xs">{tool.file_path}</Code>
-            </div>
-          )}
+          <div>
+            <Text size="sm" fw={500} className="mb-1">
+              Relative Path
+            </Text>
+            <Code className="text-xs">{tool.relative_path}</Code>
+          </div>
 
-          {/* Parameters */}
-          {Object.keys(tool.parameters).length > 0 && (
+          {/* Methods for classes */}
+          {tool.type === 'class' && tool.methods && tool.methods.length > 0 && (
             <div>
               <Text size="sm" fw={500} className="mb-2">
-                Parameters ({Object.keys(tool.parameters).length})
+                Methods ({tool.methods.length})
               </Text>
               <div className="space-y-2">
-                {Object.entries(tool.parameters).map(([paramName, paramInfo]) => (
-                  <div key={paramName} className="bg-gray-50 p-3 rounded">
-                    <div className="flex items-center justify-between mb-1">
+                {tool.methods.map((method, index) => (
+                  <Card key={index} p="xs" withBorder>
+                    <Group gap="xs" align="flex-start">
                       <Text size="sm" fw={500}>
-                        {paramName}
+                        {method.name}
                       </Text>
-                      {typeof paramInfo === 'object' && paramInfo.required && (
-                        <Badge size="xs" color="red">
-                          Required
-                        </Badge>
+                      {!method.has_docstring && (
+                        <Tooltip label="Missing docstring - add a description for this method">
+                          <IconAlertTriangle size={14} color="orange" />
+                        </Tooltip>
                       )}
-                    </div>
-                    <div className="space-y-1">
-                      {typeof paramInfo === 'object' && (
-                        <>
-                          <Text size="xs" color="dimmed">
-                            Type: {paramInfo.type || 'any'}
-                          </Text>
-                          {paramInfo.description && (
-                            <Text size="xs" color="dimmed">
-                              {paramInfo.description}
-                            </Text>
-                          )}
-                        </>
-                      )}
-                      {typeof paramInfo === 'string' && (
-                        <Text size="xs" color="dimmed">
-                          {paramInfo}
-                        </Text>
-                      )}
-                    </div>
-                  </div>
+                    </Group>
+                    {method.signature && (
+                      <Text size="xs" color="dimmed" mt="xs" style={{ fontFamily: 'monospace' }}>
+                        {method.name}{method.signature}
+                      </Text>
+                    )}
+                    {method.description && (
+                      <Text size="xs" color="dimmed" mt="xs">
+                        {method.description}
+                      </Text>
+                    )}
+                  </Card>
                 ))}
               </div>
             </div>
           )}
-
-          {/* JSON View */}
-          <div>
-            <Text size="sm" fw={500} className="mb-2">
-              Tool Configuration
-            </Text>
-            <ScrollArea h={200}>
-              <Code block className="text-xs">
-                {JSON.stringify(tool, null, 2)}
-              </Code>
-            </ScrollArea>
-          </div>
         </div>
       </div>
     </Modal>

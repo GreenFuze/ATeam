@@ -27,7 +27,7 @@ from monitoring import monitor_performance, performance_monitor, error_tracker
 
 # Initialize managers
 agent_manager = AgentManager("agents.yaml")
-tool_manager = ToolManager("tools.yaml")
+tool_manager = ToolManager("tools")
 prompt_manager = PromptManager("prompts")
 provider_manager = ProviderManager("providers.yaml")
 models_manager = ModelsManager("models.yaml")
@@ -182,48 +182,22 @@ async def get_tool(tool_name: str):
         tool = tool_manager.get_tool(tool_name)
         if not tool:
             raise HTTPException(status_code=404, detail="Tool not found")
-        return tool.model_dump()
+        return tool
     except HTTPException:
         raise
     except Exception as e:
         error_tracker.track_error(e, {"endpoint": "get_tool", "tool_name": tool_name})
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/tools")
-@monitor_performance("create_tool")
-async def create_tool(tool_config: Dict[str, Any]):
-    """Create a new tool"""
+@app.get("/api/tools/directory/path")
+@monitor_performance("get_tools_directory_path")
+async def get_tools_directory_path():
+    """Get the tools directory path"""
     try:
-        tool_name = tool_manager.create_tool(tool_config)
-        return {"tool_name": tool_name, "message": "Tool created successfully"}
+        path = tool_manager.get_tools_directory_path()
+        return {"path": path}
     except Exception as e:
-        error_tracker.track_error(e, {"endpoint": "create_tool", "config": tool_config})
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.put("/api/tools/{tool_name}")
-@monitor_performance("update_tool")
-async def update_tool(tool_name: str, tool_config: Dict[str, Any]):
-    """Update a tool"""
-    try:
-        tool_manager.update_tool(tool_name, tool_config)
-        return {"message": "Tool updated successfully"}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        error_tracker.track_error(e, {"endpoint": "update_tool", "tool_name": tool_name})
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.delete("/api/tools/{tool_name}")
-@monitor_performance("delete_tool")
-async def delete_tool(tool_name: str):
-    """Delete a tool"""
-    try:
-        tool_manager.delete_tool(tool_name)
-        return {"message": "Tool deleted successfully"}
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        error_tracker.track_error(e, {"endpoint": "delete_tool", "tool_name": tool_name})
+        error_tracker.track_error(e, {"endpoint": "get_tools_directory_path"})
         raise HTTPException(status_code=500, detail=str(e))
 
 # Provider endpoints

@@ -7,7 +7,8 @@ import {
 } from '@mantine/core';
 import {
   IconTools, IconBrain, IconSettings, IconPlus,
-  IconDatabase, IconEye, IconAlertTriangle, IconCode, IconEdit
+  IconDatabase, IconEye, IconAlertTriangle, IconCode, IconEdit,
+  IconChevronDown, IconChevronRight
 } from '@tabler/icons-react';
 import { toolsApi, promptsApi, modelsApi, schemasApi } from '../api';
 import { ToolConfig, PromptConfig } from '../types';
@@ -19,22 +20,21 @@ const SettingsPage: React.FC = () => {
   const activeTab = searchParams.get('tab') || 'tools';
   
   const [tools, setTools] = useState<ToolConfig[]>([]);
+  const [toolsDirectoryPath, setToolsDirectoryPath] = useState<string>('');
   const [prompts, setPrompts] = useState<PromptConfig[]>([]);
   const [providers, setProviders] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
   const [schemas, setSchemas] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
   // Modal states
-  const [createToolModal, setCreateToolModal] = useState(false);
-  const [viewToolModal, setViewToolModal] = useState(false);
   const [editPromptModal, setEditPromptModal] = useState(false);
   const [editProviderModal, setEditProviderModal] = useState(false);
   const [editModelModal, setEditModelModal] = useState(false);
   const [createSchemaModal, setCreateSchemaModal] = useState(false);
   const [viewSchemaModal, setViewSchemaModal] = useState(false);
   const [editSchemaModal, setEditSchemaModal] = useState(false);
-  const [selectedTool, setSelectedTool] = useState<ToolConfig | null>(null);
   const [selectedPrompt, setSelectedPrompt] = useState<PromptConfig | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<any>(null);
   const [selectedModel, setSelectedModel] = useState<any>(null);
@@ -51,16 +51,7 @@ const SettingsPage: React.FC = () => {
     content: ''
   });
 
-  // Form states
-  const [newTool, setNewTool] = useState({
-    name: '',
-    description: '',
-    code: '',
-    parameters: {},
-    is_provider_tool: false,
-    provider: null,
-    file_path: null
-  });
+
 
 
 
@@ -157,6 +148,10 @@ const SettingsPage: React.FC = () => {
       // Load tools
       const toolsResponse = await toolsApi.getAll();
       setTools(toolsResponse || []);
+      
+      // Load tools directory path
+      const toolsPathResponse = await toolsApi.getDirectoryPath();
+      setToolsDirectoryPath(toolsPathResponse);
 
       // Load prompts
       const promptsResponse = await promptsApi.getAll();
@@ -187,21 +182,21 @@ const SettingsPage: React.FC = () => {
     }
   };
 
-  const handleCreateTool = async () => {
-    try {
-      await toolsApi.create(newTool);
-      setCreateToolModal(false);
-      setNewTool({ name: '', description: '', code: '', parameters: {}, is_provider_tool: false, provider: null, file_path: null });
-      loadData();
-    } catch (error) {
-      // Error handling is now done by the API layer
-      console.error('Failed to create tool:', error);
-    }
-  };
+
 
   const handleCreatePrompt = () => {
     setSelectedPrompt(null);
     setEditPromptModal(true);
+  };
+
+  const toggleToolExpansion = (toolName: string) => {
+    const newExpanded = new Set(expandedTools);
+    if (newExpanded.has(toolName)) {
+      newExpanded.delete(toolName);
+    } else {
+      newExpanded.add(toolName);
+    }
+    setExpandedTools(newExpanded);
   };
 
   const handleEditProvider = async () => {
@@ -347,15 +342,15 @@ const SettingsPage: React.FC = () => {
           <Group justify="space-between" mb="xl">
             <Group>
               <IconTools size={24} />
-              <Title order={2}>Custom Tools</Title>
+              <Title order={2}>Available Tools</Title>
             </Group>
-            <Button
-              leftSection={<IconPlus size={16} />}
-              onClick={() => setCreateToolModal(true)}
-            >
-              Create Tool
-            </Button>
           </Group>
+          
+          {toolsDirectoryPath && (
+            <Text size="sm" c="dimmed" mb="md">
+              Tools directory: {toolsDirectoryPath}
+            </Text>
+          )}
           
           <Grid>
             {tools.map((tool) => (
@@ -363,23 +358,86 @@ const SettingsPage: React.FC = () => {
                 <Card p="md" withBorder>
                   <Group justify="space-between" align="flex-start">
                     <div style={{ flex: 1 }}>
-                      <Text fw={500} mb="xs">{tool.name}</Text>
+                      <Group gap="xs" mb="xs">
+                        <Text fw={500}>{tool.name}</Text>
+                        <Badge size="sm" variant="light" color={tool.type === 'function' ? 'blue' : 'green'}>
+                          {tool.type}
+                        </Badge>
+                        {!tool.has_docstring && (
+                          <Tooltip label="Missing docstring - add a description for this tool">
+                            <IconAlertTriangle size={16} color="orange" />
+                          </Tooltip>
+                        )}
+                      </Group>
                       <Text size="sm" c="dimmed" mb="xs" lineClamp={2}>
-                        {tool.description}
+                        {tool.description || 'No description available'}
                       </Text>
+                      <Text size="xs" c="dimmed">
+                        {tool.relative_path}
+                      </Text>
+                      {tool.type === 'function' && tool.signature && (
+                        <Text size="xs" c="dimmed" style={{ fontFamily: 'monospace' }}>
+                          {tool.name}{tool.signature}
+                        </Text>
+                      )}
+                      {tool.type === 'class' && tool.methods && tool.methods.length > 0 && (
+                        <Group gap="xs" mt="xs">
+                          <Text size="xs" c="dimmed">
+                            {tool.methods.length} method{tool.methods.length !== 1 ? 's' : ''}
+                          </Text>
+                          <button
+                            onClick={() => toggleToolExpansion(tool.name)}
+                            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
+                            title={expandedTools.has(tool.name) ? "Collapse methods" : "Expand methods"}
+                          >
+                            {expandedTools.has(tool.name) ? (
+                              <IconChevronDown size={12} />
+                            ) : (
+                              <IconChevronRight size={12} />
+                            )}
+                          </button>
+                        </Group>
+                      )}
                     </div>
-                    <Button
-                      size="xs"
-                      variant="subtle"
-                      leftSection={<IconEye size={14} />}
-                      onClick={() => {
-                        setSelectedTool(tool);
-                        setViewToolModal(true);
-                      }}
-                    >
-                      View
-                    </Button>
                   </Group>
+                  
+                  {/* Expanded methods section */}
+                  {tool.type === 'class' && tool.methods && tool.methods.length > 0 && expandedTools.has(tool.name) && (
+                    <div className="mt-4 pt-4 border-t border-gray-200">
+                      <Text size="sm" fw={500} mb="xs">Methods:</Text>
+                      <Stack gap="xs">
+                        {tool.methods.map((method, index) => (
+                          <Card key={index} p="xs" withBorder>
+                            <Group gap="xs" align="flex-start">
+                              <Text size="sm" fw={500}>
+                                {method.name}
+                              </Text>
+                              {!method.has_docstring && (
+                                <Tooltip label="Missing docstring - add a description for this method">
+                                  <IconAlertTriangle size={12} color="orange" />
+                                </Tooltip>
+                              )}
+                            </Group>
+                            {method.signature && (
+                              <Text size="xs" c="dimmed" style={{ fontFamily: 'monospace' }}>
+                                {method.name}{method.signature}
+                              </Text>
+                            )}
+                            {method.description && (
+                              <Text size="xs" c="dimmed" mt="xs">
+                                {method.description}
+                              </Text>
+                            )}
+                            {!method.has_docstring && (
+                              <Text size="xs" c="orange" mt="xs">
+                                Missing docstring
+                              </Text>
+                            )}
+                          </Card>
+                        ))}
+                      </Stack>
+                    </div>
+                  )}
                 </Card>
               </Grid.Col>
             ))}
@@ -389,17 +447,10 @@ const SettingsPage: React.FC = () => {
             <Card p="xl" withBorder>
               <Stack align="center" gap="md">
                 <IconTools size={48} style={{ opacity: 0.5 }} />
-                <Title order={3}>No custom tools created yet</Title>
+                <Title order={3}>No tools found</Title>
                 <Text size="lg" c="dimmed" ta="center">
-                  Create your first custom tool to extend agent capabilities
+                  No Python tools found in the tools directory
                 </Text>
-                <Button 
-                  leftSection={<IconPlus size={16} />}
-                  onClick={() => setCreateToolModal(true)}
-                  size="lg"
-                >
-                  Create Your First Tool
-                </Button>
               </Stack>
             </Card>
           )}
@@ -783,58 +834,11 @@ const SettingsPage: React.FC = () => {
         </Paper>
       )}
 
-      {/* Create Tool Modal */}
-      <Modal
-        opened={createToolModal}
-        onClose={() => setCreateToolModal(false)}
-        title="Create New Tool"
-        size="lg"
-      >
-        <Stack gap="md">
-          <TextInput
-            label="Tool Name"
-            value={newTool.name}
-            onChange={(e) => setNewTool({ ...newTool, name: e.target.value })}
-            required
-          />
-          <Textarea
-            label="Description"
-            value={newTool.description}
-            onChange={(e) => setNewTool({ ...newTool, description: e.target.value })}
-            required
-          />
-          <Textarea
-            label="Python Code"
-            value={newTool.code}
-            onChange={(e) => setNewTool({ ...newTool, code: e.target.value })}
-            required
-            minRows={4}
-          />
-          <Group>
-            <Button onClick={handleCreateTool}>Create Tool</Button>
-            <Button variant="subtle" onClick={() => setCreateToolModal(false)}>Cancel</Button>
-          </Group>
-        </Stack>
-      </Modal>
 
 
 
-      {/* View Tool Modal */}
-      <Modal
-        opened={viewToolModal}
-        onClose={() => setViewToolModal(false)}
-        title={selectedTool?.name}
-        size="lg"
-      >
-        {selectedTool && (
-          <Stack gap="md">
-            <Text><strong>Description:</strong> {selectedTool.description}</Text>
-            <Text><strong>Provider:</strong> {selectedTool.provider || 'None'}</Text>
-            <Text><strong>Parameters:</strong></Text>
-            <Code block>{JSON.stringify(selectedTool.parameters, null, 2)}</Code>
-          </Stack>
-        )}
-      </Modal>
+
+
 
       {/* Prompt Editor Modal */}
       <PromptEditor

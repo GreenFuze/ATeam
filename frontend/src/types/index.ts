@@ -37,13 +37,22 @@ export interface AgentConfig {
   updated_at?: string;
 }
 
+export interface ToolMethod {
+  name: string;
+  description?: string;
+  has_docstring: boolean;
+  signature: string;
+}
+
 export interface ToolConfig {
   name: string;
-  description: string;
-  parameters: Record<string, any>;
-  is_provider_tool: boolean;
-  provider?: string;
-  file_path?: string;
+  type: 'function' | 'class';
+  description?: string;
+  file_path: string;
+  relative_path: string;
+  has_docstring: boolean;
+  signature?: string;
+  methods?: ToolMethod[];
 }
 
 export interface PromptConfig {

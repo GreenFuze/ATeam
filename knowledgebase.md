@@ -77,35 +77,55 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 ## Recent Enhancements
 
 ### Enhanced Prompt Management (July 2025)
-The prompt management system has been significantly enhanced with the following improvements:
+The prompt management system has been significantly enhanced with comprehensive editing capabilities and improved user experience:
 
 #### Key Features
 - **Full CRUD Operations**: Create, read, update, and delete prompts with persistent metadata
 - **YAML-based Metadata**: Prompt metadata (name, type) stored in `prompts.yaml` for version control
 - **Specialized Editing Interfaces**: Different editing experiences for system vs seed prompts
-- **Large Modal Dialogs**: Percentage-based sizing that adapts to content without horizontal scrolling
-- **Enhanced MessageDisplay**: Reusable component that supports both view and edit modes
-- **Seed Prompt Editor**: Chat-like interface for creating simulated conversations
+- **Large Modal Dialogs**: Percentage-based sizing (80% width, 95% max height) that adapts to content without horizontal scrolling
+- **Enhanced MessageDisplay**: Reusable component that supports both view and edit modes with dynamic textarea sizing
+- **Seed Prompt Editor**: Chat-like interface for creating simulated conversations with multiple roles
 - **Type Safety**: Complete type safety with Pydantic models and TypeScript interfaces
+- **Dynamic Content Sizing**: Textarea automatically resizes based on content (8-50 rows) with autosize functionality
+- **Enhanced Menu Options**: Context-aware display options with edit/view mode switching
 
 #### Technical Implementation
 - **Backend Changes**:
   - New `prompts.yaml` file for metadata persistence
-  - Enhanced `PromptManager` with YAML integration
-  - New API endpoints for seed prompt structured data
+  - Enhanced `PromptManager` with YAML integration and metadata management
+  - New API endpoints for seed prompt structured data (`/api/prompts/{name}/seed`)
   - Removed "agent" prompt type (reclassified as "system")
   - Added `UpdatePromptRequest`, `SeedMessage`, `SeedPromptData` schemas
+  - JSON-based storage for seed prompts with markdown fallback for backward compatibility
 
 - **Frontend Changes**:
-  - Enhanced `MessageDisplay` component with editable mode
-  - New `SeedPromptEditor` component for chat-like editing
-  - Larger `PromptEditor` modal with delete functionality
-  - Updated API client with new endpoints
-  - Changed "View" buttons to "Edit" buttons
+  - Enhanced `MessageDisplay` component with editable mode and dynamic textarea sizing
+  - New `SeedPromptEditor` component for chat-like editing with role selection
+  - Larger `PromptEditor` modal (95% max height) with delete functionality
+  - Updated API client with new endpoints for structured seed data
+  - Changed "View" buttons to "Edit" buttons throughout the interface
+  - Enhanced menu options with conditional display based on edit state
 
-#### Prompt Types
-- **System Prompts**: Editable content with text/markdown toggle (default: text view)
-- **Seed Prompts**: Chat-like interface for creating simulated conversations with multiple roles
+#### Prompt Types and Editing Experience
+- **System Prompts**: 
+  - Editable content with text/markdown toggle (default: text view for editing)
+  - Large textarea (8-50 rows) with autosize functionality
+  - Enhanced menu options: "Edit Content" when viewing, "View Content" when editing
+  - Markdown/Plain Text options only available when not in edit mode
+- **Seed Prompts**: 
+  - Chat-like interface for creating simulated conversations
+  - JSON-based storage format for LLM compatibility
+  - Support for multiple roles (user, assistant, system) in any order
+  - Backward compatibility with existing markdown-formatted seed prompts
+
+#### User Experience Improvements
+- **Dynamic Sizing**: Textarea starts at 8 rows minimum and can expand up to 50 rows based on content
+- **Autosize Functionality**: Textarea automatically adjusts height to fit content
+- **Better Typography**: Improved font size (14px) and line height (1.5) for readability
+- **Context-Aware Menus**: Display options change based on current edit state
+- **Large Modal Support**: Modal can use up to 95% of screen height for extensive content
+- **Content Persistence**: Content properly loads and persists when switching between prompts
 
 ## File Organization
 - `backend/agents.yaml` - Agent configurations
@@ -357,6 +377,25 @@ The prompt management system has been significantly enhanced with the following 
 - **Impact**: Complete model configuration, accurate context tracking, proper inference settings
 - **Status**: ✅ COMPLETE - All models configured with accurate specifications
 
+### ✅ Enhanced Prompt Editing Interface
+- **Root Cause**: Need for better editing experience for large prompt content with dynamic sizing
+- **Issue**: Small textarea (4-12 rows) insufficient for large content, missing edit options in menu
+- **Solution**: Implemented dynamic textarea sizing with enhanced menu options and larger modal
+- **Implementation**:
+  - **Dynamic Textarea**: Increased from 4-12 rows to 8-50 rows with autosize functionality
+  - **Enhanced Menu Options**: Context-aware display with "Edit Content" and "View Content" options
+  - **Modal Sizing**: Increased max height from 80vh to 95vh for better content visibility
+  - **Typography Improvements**: Better font size (14px) and line height (1.5) for readability
+  - **Content Persistence**: Fixed content loading issues when switching between prompts
+  - **Conditional Display**: Markdown/Plain Text options only shown when not in edit mode
+- **Technical Challenges**:
+  - **Content Synchronization**: Used `useEffect` to sync `editContent` with `message.content` changes
+  - **Menu State Management**: Conditional rendering based on `isEditing` state
+  - **Autosize Integration**: Proper Mantine Textarea autosize prop configuration
+  - **Modal Height Optimization**: Balance between usability and screen real estate
+- **Impact**: Much better editing experience for large prompt content, intuitive interface
+- **Status**: ✅ COMPLETE - All editing improvements implemented and tested
+
 ## Key Implementation Lessons
 
 ### Development Workflow
@@ -439,6 +478,18 @@ The prompt management system has been significantly enhanced with the following 
 4. **User Guidance**: Clear explanation of what needs to be configured
 5. **Clean Interface**: Reduces notification clutter while maintaining user awareness
 
+### Prompt Management and Editing Interface Design
+1. **Dynamic Content Sizing**: Implement autosize textareas that adapt to content length (8-50 rows)
+2. **Context-Aware Menus**: Display options should change based on current edit state
+3. **Content Persistence**: Use `useEffect` to synchronize component state with prop changes
+4. **Modal Height Optimization**: Balance between usability (95% max height) and screen real estate
+5. **Typography Considerations**: Proper font size (14px) and line height (1.5) for readability
+6. **Backward Compatibility**: Support both new JSON format and old markdown format for seed prompts
+7. **Type Safety**: Use Pydantic models for structured data (SeedMessage, SeedPromptData)
+8. **Component Reusability**: Enhance existing components (MessageDisplay) for new use cases
+9. **User Experience**: Default to edit mode for system prompts, provide clear edit/view transitions
+10. **Data Format Consistency**: Store seed prompts as JSON for LLM compatibility while supporting markdown fallback
+
 ### Common Issues and Solutions
 1. **404 on Direct Routes**: Ensure catch-all route is defined after API routes
 2. **Layout Issues**: Use proper flexbox CSS with `!important` declarations
@@ -473,6 +524,15 @@ The prompt management system has been significantly enhanced with the following 
 31. **Model Warning Icons**: Use targeted warning icons instead of global notifications for model-specific issues
 32. **Notification Streamlining**: Focus global notifications on system-level issues, not individual model configurations
 33. **Complete Model Configuration**: Ensure all discovered models have proper context window sizes and inference settings
+34. **Content Synchronization**: Use `useEffect` to sync component state with prop changes to prevent empty content in editors
+35. **Menu State Management**: Implement conditional rendering for display options based on edit state
+36. **Textarea Autosize**: Use Mantine's `autosize` prop with proper `minRows` and `maxRows` for dynamic sizing
+37. **Modal Height Optimization**: Set `maxHeight: '95vh'` for large content while maintaining usability
+38. **Typography Optimization**: Use `fontSize: '14px'` and `lineHeight: '1.5'` for better readability in textareas
+39. **Seed Prompt Format**: Store as JSON for LLM compatibility with markdown fallback for backward compatibility
+40. **Component Enhancement**: Extend existing components (MessageDisplay) with new props for reusability
+41. **Edit Mode Defaults**: Set `defaultEditMode={true}` for system prompts to provide immediate editing capability
+42. **Context-Aware UI**: Hide display mode options when in edit mode to reduce interface clutter
 
 ## Removed Features
 - ❌ Local SQLite database integration
@@ -598,6 +658,13 @@ ATeam/
 - ✅ Proper type conversion in forms
 - ✅ Model warning icons for configuration issues
 - ✅ Complete OpenAI model configuration
+- ✅ Enhanced prompt management with full CRUD operations
+- ✅ Dynamic textarea sizing (8-50 rows) with autosize functionality
+- ✅ Context-aware menu options for prompt editing
+- ✅ Large modal dialogs (95% max height) for extensive content
+- ✅ Specialized editing interfaces for system and seed prompts
+- ✅ JSON-based seed prompt storage with markdown fallback
+- ✅ Content persistence and synchronization across prompt switches
 
 ### System Health
 - **0 Warnings**: All providers and models properly configured

@@ -97,6 +97,13 @@ export const toolsApi = {
     }, 'Failed to Load Tools');
   },
 
+  getDirectoryPath: async (): Promise<string> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ path: string }> = await api.get('/tools/directory/path');
+      return response.data.path;
+    }, 'Failed to Load Tools Directory Path');
+  },
+
   getByName: async (name: string): Promise<ToolConfig> => {
     return apiCall(async () => {
       const response: AxiosResponse<ToolConfig> = await api.get(`/tools/${name}`);
