@@ -3,12 +3,14 @@ import {
   AgentConfig,
   ToolConfig,
   PromptConfig,
+  PromptType,
+  SeedMessage,
+  SeedPromptData,
   ChatMessageRequest,
   ChatMessageResponse,
   CreateAgentRequest,
   CreateToolRequest,
-  CreatePromptRequest,
-  ModelInfo
+  CreatePromptRequest
 } from '../types';
 import { ErrorHandler } from '../utils/errorHandler';
 
@@ -133,22 +135,113 @@ export const promptsApi = {
     }, 'Failed to Create Prompt');
   },
 
-  update: async (name: string, content: string): Promise<{ message: string }> => {
+  update: async (name: string, content: string, newName?: string, type?: PromptType): Promise<{ message: string }> => {
     return apiCall(async () => {
-      const response: AxiosResponse<{ message: string }> = await api.put(`/prompts/${name}`, { content });
+      const response: AxiosResponse<{ message: string }> = await api.put(`/prompts/${name}`, { 
+        name: newName || name, 
+        content, 
+        type 
+      });
       return response.data;
     }, `Failed to Update Prompt: ${name}`);
+  },
+
+  delete: async (name: string): Promise<{ message: string }> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ message: string }> = await api.delete(`/prompts/${name}`);
+      return response.data;
+    }, `Failed to Delete Prompt: ${name}`);
+  },
+
+  getSeedPrompt: async (name: string): Promise<SeedPromptData> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ messages: SeedMessage[] }> = await api.get(`/prompts/${name}/seed`);
+      return { messages: response.data.messages };
+    }, `Failed to Load Seed Prompt: ${name}`);
+  },
+
+  updateSeedPrompt: async (name: string, seedData: SeedPromptData): Promise<{ message: string }> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ message: string }> = await api.put(`/prompts/${name}/seed`, seedData);
+      return response.data;
+    }, `Failed to Update Seed Prompt: ${name}`);
   },
 };
 
 // Models API
 export const modelsApi = {
-  getAll: async (): Promise<ModelInfo[]> => {
+  getAll: async (): Promise<any[]> => {
     return apiCall(async () => {
-      const response: AxiosResponse<ModelInfo[]> = await api.get('/models');
-      return response.data;
+      const response: AxiosResponse<{ models: any[] }> = await api.get('/models');
+      return response.data.models || [];
     }, 'Failed to Load Models');
   },
+
+  get: async (modelId: string): Promise<any> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ model: any }> = await api.get(`/models/${modelId}`);
+      return response.data.model;
+    }, `Failed to Load Model: ${modelId}`);
+  },
+
+  update: async (modelId: string, modelConfig: any): Promise<any> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ message: string }> = await api.put(`/models/${modelId}`, modelConfig);
+      return response.data;
+    }, `Failed to Update Model: ${modelId}`);
+  },
+
+  delete: async (modelId: string): Promise<any> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ message: string }> = await api.delete(`/models/${modelId}`);
+      return response.data;
+    }, `Failed to Delete Model: ${modelId}`);
+  },
+
+  getSettings: async (modelId: string): Promise<any> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ schema: any }> = await api.get(`/models/${modelId}/settings`);
+      return response.data;
+    }, `Failed to Load Model Settings: ${modelId}`);
+  }
+};
+
+// Schemas API
+export const schemasApi = {
+  getAll: async (): Promise<any[]> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<{ schemas: any[] }> = await api.get('/schemas');
+      return response.data.schemas || [];
+    }, 'Failed to Load Schemas');
+  },
+
+  get: async (schemaName: string): Promise<any> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<any> = await api.get(`/schemas/${schemaName}`);
+      return response.data;
+    }, `Failed to Load Schema: ${schemaName}`);
+  },
+
+  create: async (schemaConfig: { name: string; content: any }): Promise<any> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<any> = await api.post('/schemas', schemaConfig);
+      return response.data;
+    }, 'Failed to Create Schema');
+  },
+
+  update: async (schemaName: string, schemaConfig: { content: any }): Promise<any> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<any> = await api.put(`/schemas/${schemaName}`, schemaConfig);
+      return response.data;
+    }, `Failed to Update Schema: ${schemaName}`);
+  },
+
+  delete: async (schemaName: string): Promise<any> => {
+    return apiCall(async () => {
+      const response: AxiosResponse<any> = await api.delete(`/schemas/${schemaName}`);
+      return response.data;
+    }, `Failed to Delete Schema: ${schemaName}`);
+  }
 };
 
 // Chat API

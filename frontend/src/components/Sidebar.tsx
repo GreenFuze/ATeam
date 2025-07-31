@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Text, Stack, NavLink, Group, ActionIcon, Tooltip,
-  Tabs, Card, ScrollArea, Button
+  Tabs, Card, ScrollArea, Button, Modal
 } from '@mantine/core';
 import {
   IconBrain,
@@ -13,7 +13,10 @@ import {
   IconActivity,
   IconUsers,
   IconPlus,
-  IconCpu
+  IconCpu,
+  IconCode,
+  IconBell,
+  IconAlertCircle
 } from '@tabler/icons-react';
 
 interface SidebarProps {
@@ -34,10 +37,14 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [activeTab, setActiveTab] = useState<string | null>('agents');
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notificationModal, setNotificationModal] = useState(false);
+  const [checkingHealth, setCheckingHealth] = useState(false);
 
   // Load agents when component mounts
   React.useEffect(() => {
     loadAgents();
+    checkSystemHealth();
   }, []);
 
   const loadAgents = async () => {
@@ -67,12 +74,88 @@ const Sidebar: React.FC<SidebarProps> = ({
     onAgentSettings(agentId);
   };
 
+  const checkSystemHealth = async () => {
+    setCheckingHealth(true);
+    try {
+      const newNotifications: any[] = [];
+      
+      // Check providers
+      const providersResponse = await fetch('/api/providers');
+      if (providersResponse.ok) {
+        const providersData = await providersResponse.json();
+        const providers = providersData.providers || [];
+        
+        // Check for unconfigured providers
+        providers.forEach((provider: any) => {
+          if (!provider.configured) {
+            newNotifications.push({
+              id: `provider-${provider.name}`,
+              type: 'warning',
+              title: 'Provider Not Configured',
+              message: `Provider "${provider.display_name}" is detected but not configured. Please configure it in Settings.`,
+              timestamp: new Date().toISOString()
+            });
+          }
+        });
+      }
+      
+      // Check models - removed context window notifications as they will be shown as warning icons on models
+      
+      setNotifications(newNotifications);
+    } catch (error) {
+      console.error('Failed to check system health:', error);
+      setNotifications([{
+        id: 'health-check-error',
+        type: 'error',
+        title: 'Health Check Failed',
+        message: 'Failed to perform system health check. Please try again.',
+        timestamp: new Date().toISOString()
+      }]);
+    } finally {
+      setCheckingHealth(false);
+    }
+  };
+
+  const getNotificationIcon = () => {
+    if (notifications.length === 0) {
+      return <IconBell size={20} />;
+    }
+    
+    const hasErrors = notifications.some(n => n.type === 'error');
+    const hasWarnings = notifications.some(n => n.type === 'warning');
+    
+    if (hasErrors) {
+      return <IconAlertCircle size={20} color="red" />;
+    } else if (hasWarnings) {
+      return <IconAlertCircle size={20} color="orange" />;
+    } else {
+      return <IconBell size={20} color="blue" />;
+    }
+  };
+
   return (
     <div className="sidebar p-4">
       <div className="mb-6">
-        <Text size="lg" fw={700} className="text-dark-primary">
-          ATeam
-        </Text>
+        <Group justify="space-between" align="center">
+          <Text size="lg" fw={700} className="text-dark-primary">
+            A-Team
+          </Text>
+          <Tooltip label={notifications.length > 0 ? `${notifications.length} notification(s)` : 'No notifications'}>
+            <ActionIcon
+              variant="subtle"
+              onClick={() => setNotificationModal(true)}
+              disabled={checkingHealth}
+              className="relative"
+            >
+              {getNotificationIcon()}
+              {notifications.length > 0 && (
+                <div className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full min-w-[20px] h-5 flex items-center justify-center px-1.5">
+                  {notifications.length > 99 ? '99+' : notifications.length}
+                </div>
+              )}
+            </ActionIcon>
+          </Tooltip>
+        </Group>
       </div>
 
       <Tabs value={activeTab} onChange={setActiveTab} className="flex-1">
@@ -193,6 +276,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                 className="text-dark-primary hover:bg-dark-7"
               />
               <NavLink
+                label="Schemas"
+                leftSection={<IconCode size={16} />}
+                active={location.pathname === '/settings' && location.search.includes('tab=schemas')}
+                onClick={() => handleNavigation('/settings?tab=schemas')}
+                className="text-dark-primary hover:bg-dark-7"
+              />
+              <NavLink
                 label="Monitoring"
                 leftSection={<IconActivity size={16} />}
                 active={location.pathname === '/settings' && location.search.includes('tab=monitoring')}
@@ -203,6 +293,61 @@ const Sidebar: React.FC<SidebarProps> = ({
           </ScrollArea>
         </Tabs.Panel>
       </Tabs>
+
+      {/* Notification Modal */}
+      <Modal
+        opened={notificationModal}
+        onClose={() => setNotificationModal(false)}
+        title="System Notifications"
+        size="lg"
+      >
+        <Stack gap="md">
+          {checkingHealth ? (
+            <Text c="dimmed">Checking system health...</Text>
+          ) : notifications.length === 0 ? (
+            <Text c="dimmed">No notifications. System is healthy!</Text>
+          ) : (
+            <>
+              <Group justify="space-between">
+                <Text fw={500}>Found {notifications.length} notification(s)</Text>
+                <Button
+                  size="xs"
+                  variant="light"
+                  onClick={checkSystemHealth}
+                  loading={checkingHealth}
+                >
+                  Refresh
+                </Button>
+              </Group>
+              
+              <Stack gap="sm">
+                {notifications.map((notification) => (
+                  <Card key={notification.id} p="sm" withBorder>
+                    <Group gap="sm" align="flex-start">
+                      <div>
+                        {notification.type === 'error' && <IconAlertCircle size={16} color="red" />}
+                        {notification.type === 'warning' && <IconAlertCircle size={16} color="orange" />}
+                        {notification.type === 'info' && <IconBell size={16} color="blue" />}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <Text size="sm" fw={500}>
+                          {notification.title}
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          {notification.message}
+                        </Text>
+                        <Text size="xs" c="dimmed" mt="xs">
+                          {new Date(notification.timestamp).toLocaleString()}
+                        </Text>
+                      </div>
+                    </Group>
+                  </Card>
+                ))}
+              </Stack>
+            </>
+          )}
+        </Stack>
+      </Modal>
     </div>
   );
 };

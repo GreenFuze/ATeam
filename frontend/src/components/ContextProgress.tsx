@@ -12,6 +12,33 @@ const ContextProgress: React.FC<ContextProgressProps> = ({
   size = 40, 
   thickness = 4 
 }) => {
+  // Check if context window is not set (N/A)
+  if (percentage === 0) {
+    return (
+      <Box style={{ position: 'relative', display: 'inline-block' }}>
+        <RingProgress
+          size={size}
+          thickness={thickness}
+          sections={[{ value: 0, color: 'gray' }]}
+          rootColor="var(--mantine-color-gray-3)"
+        />
+        <Text
+          size="xs"
+          fw={600}
+          style={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            color: 'var(--mantine-color-gray-5)'
+          }}
+        >
+          N/A
+        </Text>
+      </Box>
+    );
+  }
+  
   // Ensure percentage is between 0 and 100
   const clampedPercentage = Math.max(0, Math.min(100, percentage));
   

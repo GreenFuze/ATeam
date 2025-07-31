@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-from models import AgentConfig, CreateAgentRequest
+from schemas import AgentConfig, CreateAgentRequest
 
 class AgentManager:
     def __init__(self, config_path: str = "agents.yaml"):

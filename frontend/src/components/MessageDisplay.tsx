@@ -1,12 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box, Text, Group, ActionIcon, Tooltip, Menu, Badge,
-  Paper, Stack
+  Paper, Stack, Textarea, Button
 } from '@mantine/core';
 import {
   IconBrain, IconTool, IconUser, IconMessage,
   IconDotsVertical, IconFileText, IconMarkdown,
-  IconQuestionMark, IconSettings
+  IconQuestionMark, IconSettings, IconEdit
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { Message, MessageType } from '../types';
@@ -14,13 +14,33 @@ import { Message, MessageType } from '../types';
 interface MessageDisplayProps {
   message: Message;
   agentName?: string;
+  editable?: boolean;
+  defaultDisplayMode?: 'markdown' | 'text';
+  defaultEditMode?: boolean;
+  onSave?: (content: string) => void;
+  onCancel?: () => void;
 }
 
 type DisplayMode = 'markdown' | 'text';
 
-const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, agentName }) => {
-  const [displayMode, setDisplayMode] = useState<DisplayMode>('markdown');
+const MessageDisplay: React.FC<MessageDisplayProps> = ({ 
+  message, 
+  agentName, 
+  editable = false, 
+  defaultDisplayMode = 'markdown',
+  defaultEditMode = false,
+  onSave,
+  onCancel 
+}) => {
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(defaultDisplayMode);
   const [showOptions, setShowOptions] = useState(false);
+  const [editContent, setEditContent] = useState(message.content);
+  const [isEditing, setIsEditing] = useState(editable && defaultEditMode);
+
+  // Update editContent when message content changes
+  useEffect(() => {
+    setEditContent(message.content);
+  }, [message.content]);
 
   const getMessageIcon = (messageType: MessageType) => {
     switch (messageType) {
@@ -75,21 +95,63 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, agentName }) =
     }
   };
 
-  const formatTimestamp = (timestamp: string) => {
-    return new Date(timestamp).toLocaleTimeString();
+
+
+  const handleSave = () => {
+    if (onSave) {
+      onSave(editContent);
+      setIsEditing(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setEditContent(message.content);
+    setIsEditing(false);
+    if (onCancel) {
+      onCancel();
+    }
   };
 
   const renderMessageContent = () => {
-    let content = message.content;
+    let content = isEditing ? editContent : message.content;
 
     // Try to parse JSON content for structured responses
-    if (message.content.startsWith('{') && message.content.endsWith('}')) {
+    if (content.startsWith('{') && content.endsWith('}')) {
       try {
-        const parsed = JSON.parse(message.content);
-        content = parsed.content || message.content;
+        const parsed = JSON.parse(content);
+        content = parsed.content || content;
       } catch (e) {
         // If parsing fails, use original content
       }
+    }
+
+    if (isEditing) {
+      return (
+        <Box>
+          <Textarea
+            value={editContent}
+            onChange={(e) => setEditContent(e.target.value)}
+            minRows={8}
+            maxRows={50}
+            autosize
+            style={{ 
+              backgroundColor: 'var(--mantine-color-dark-7)',
+              border: '1px solid var(--mantine-color-dark-4)',
+              color: 'white',
+              fontSize: '14px',
+              lineHeight: '1.5'
+            }}
+          />
+          <Group mt="sm" justify="flex-end">
+            <Button size="sm" variant="subtle" onClick={handleCancel}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleSave}>
+              Save
+            </Button>
+          </Group>
+        </Box>
+      );
     }
 
     if (displayMode === 'markdown') {
@@ -206,9 +268,6 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, agentName }) =
             <Text size="sm" fw={600} c="white">
               {isUserMessage ? 'You' : (agentName || `Agent ${message.agent_id}`)}
             </Text>
-            <Text size="xs" c="gray.4">
-              {formatTimestamp(message.timestamp)}
-            </Text>
           </div>
 
           {message.message_type !== MessageType.NORMAL_RESPONSE && (
@@ -228,24 +287,44 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, agentName }) =
 
             <Menu.Dropdown>
               <Menu.Label>Display Options</Menu.Label>
-              <Menu.Item
-                leftSection={<IconMarkdown size={14} />}
-                onClick={() => setDisplayMode('markdown')}
-                style={{ 
-                  backgroundColor: displayMode === 'markdown' ? 'var(--mantine-color-blue-0)' : 'transparent' 
-                }}
-              >
-                Markdown
-              </Menu.Item>
-              <Menu.Item
-                leftSection={<IconFileText size={14} />}
-                onClick={() => setDisplayMode('text')}
-                style={{ 
-                  backgroundColor: displayMode === 'text' ? 'var(--mantine-color-blue-0)' : 'transparent' 
-                }}
-              >
-                Plain Text
-              </Menu.Item>
+              {!isEditing && (
+                <>
+                  <Menu.Item
+                    leftSection={<IconMarkdown size={14} />}
+                    onClick={() => setDisplayMode('markdown')}
+                    style={{ 
+                      backgroundColor: displayMode === 'markdown' ? 'var(--mantine-color-blue-0)' : 'transparent' 
+                    }}
+                  >
+                    Markdown
+                  </Menu.Item>
+                  <Menu.Item
+                    leftSection={<IconFileText size={14} />}
+                    onClick={() => setDisplayMode('text')}
+                    style={{ 
+                      backgroundColor: displayMode === 'text' ? 'var(--mantine-color-blue-0)' : 'transparent' 
+                    }}
+                  >
+                    Plain Text
+                  </Menu.Item>
+                </>
+              )}
+              {editable && !isEditing && (
+                <Menu.Item
+                  leftSection={<IconEdit size={14} />}
+                  onClick={() => setIsEditing(true)}
+                >
+                  Edit Content
+                </Menu.Item>
+              )}
+              {editable && isEditing && (
+                <Menu.Item
+                  leftSection={<IconFileText size={14} />}
+                  onClick={() => setIsEditing(false)}
+                >
+                  View Content
+                </Menu.Item>
+              )}
             </Menu.Dropdown>
           </Menu>
         )}

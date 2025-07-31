@@ -1,0 +1,11 @@
+prompts:
+  assistant_system.md:
+    type: system
+  create_agent.md:
+    type: system
+  god_system.md:
+    type: system
+  how_to_respond_no_schema_or_grammar.md:
+    type: system
+  toolbuilder_system.md:
+    type: system

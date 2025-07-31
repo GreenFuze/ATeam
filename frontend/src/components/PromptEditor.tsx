@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Modal, TextInput, Textarea, Select, Button } from '@mantine/core';
-import { PromptConfig, PromptType } from '../types';
+import { Modal, TextInput, Select, Button, Group, Stack, Text } from '@mantine/core';
+import { PromptConfig, PromptType, SeedPromptData, SeedMessage } from '../types';
+import MessageDisplay from './MessageDisplay';
+import SeedPromptEditor from './SeedPromptEditor';
 
 interface PromptEditorProps {
   prompt: PromptConfig | null;
   isOpen: boolean;
   onClose: () => void;
   onSave: (promptData: { name: string; content: string; type: PromptType }) => void;
+  onDelete?: (promptName: string) => void;
   loading: boolean;
 }
 
@@ -15,6 +18,7 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
   isOpen,
   onClose,
   onSave,
+  onDelete,
   loading,
 }) => {
   const [formData, setFormData] = useState({
@@ -23,6 +27,7 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
     type: PromptType.SYSTEM as PromptType,
   });
 
+  const [seedData, setSeedData] = useState<SeedPromptData>({ messages: [] });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
@@ -32,12 +37,53 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
         content: prompt.content,
         type: prompt.type,
       });
+      
+      // Parse seed prompt content if it's a seed prompt
+      if (prompt.type === PromptType.SEED) {
+        try {
+          const messages = JSON.parse(prompt.content);
+          setSeedData({ messages });
+        } catch (e) {
+          // If JSON parsing fails, try to parse as markdown (backward compatibility)
+          const lines = prompt.content.split('\n');
+          const messages: SeedMessage[] = [];
+          let currentRole = '';
+          let currentContent: string[] = [];
+          
+          for (const line of lines) {
+            if (line.startsWith('## ')) {
+              if (currentRole && currentContent.length > 0) {
+                messages.push({
+                  role: currentRole.toLowerCase(),
+                  content: currentContent.join('\n').trim()
+                });
+              }
+              currentRole = line.substring(3).trim();
+              currentContent = [];
+            } else if (currentRole) {
+              currentContent.push(line);
+            }
+          }
+          
+          if (currentRole && currentContent.length > 0) {
+            messages.push({
+              role: currentRole.toLowerCase(),
+              content: currentContent.join('\n').trim()
+            });
+          }
+          
+          setSeedData({ messages });
+        }
+      } else {
+        setSeedData({ messages: [] });
+      }
     } else {
       setFormData({
         name: '',
         content: '',
         type: PromptType.SYSTEM,
       });
+      setSeedData({ messages: [] });
     }
     setErrors({});
   }, [prompt, isOpen]);
@@ -83,7 +129,6 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
   const promptTypeOptions = [
     { value: PromptType.SYSTEM, label: 'System Prompt' },
     { value: PromptType.SEED, label: 'Seed Prompt' },
-    { value: PromptType.AGENT, label: 'Agent Prompt' },
   ];
 
   return (
@@ -91,80 +136,103 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
       opened={isOpen}
       onClose={onClose}
       title={prompt ? 'Edit Prompt' : 'Create New Prompt'}
-      size="xl"
+      size="80%"
       centered
+      styles={{
+        body: { maxHeight: '95vh', overflow: 'hidden' }
+      }}
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="grid grid-cols-2 gap-4">
-          <TextInput
-            label="Prompt Name"
-            placeholder="Enter prompt name"
-            value={formData.name}
-            onChange={(e) => handleInputChange('name', e.target.value)}
-            error={errors.name}
-            required
-          />
+      <form onSubmit={handleSubmit}>
+        <Stack gap="md">
+          <Group grow>
+            <TextInput
+              label="Prompt Name"
+              placeholder="Enter prompt name"
+              value={formData.name}
+              onChange={(e) => handleInputChange('name', e.target.value)}
+              error={errors.name}
+              required
+            />
 
-          <Select
-            label="Prompt Type"
-            placeholder="Select prompt type"
-            data={promptTypeOptions}
-            value={formData.type}
-            onChange={(value) => handleInputChange('type', value as PromptType)}
-            required
-          />
-        </div>
+            <Select
+              label="Prompt Type"
+              placeholder="Select prompt type"
+              data={promptTypeOptions}
+              value={formData.type}
+              onChange={(value) => handleInputChange('type', value as PromptType)}
+              required
+            />
+          </Group>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Prompt Content
-          </label>
-          <Textarea
-            placeholder="Enter your prompt content (supports markdown)"
-            value={formData.content}
-            onChange={(e) => handleInputChange('content', e.target.value)}
-            error={errors.content}
-            required
-            minRows={15}
-            maxRows={20}
-            className="font-mono text-sm"
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Supports markdown formatting. Use # for headers, ** for bold, etc.
-          </p>
-        </div>
-
-        {/* Preview Section */}
-        {formData.content && (
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Preview
-            </label>
-            <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 max-h-64 overflow-y-auto">
-              <div className="prose prose-sm max-w-none">
-                <pre className="whitespace-pre-wrap text-sm text-gray-800">
-                  {formData.content}
-                </pre>
-              </div>
+          {formData.type === PromptType.SYSTEM && (
+            <div>
+              <Text size="sm" fw={500} mb="xs">Prompt Content</Text>
+              <MessageDisplay
+                message={{
+                  id: 'temp',
+                  agent_id: 'system',
+                  content: formData.content,
+                  message_type: 'SYSTEM' as any,
+                  timestamp: new Date().toISOString(),
+                  metadata: {}
+                }}
+                editable={true}
+                defaultDisplayMode="text"
+                defaultEditMode={true}
+                onSave={(content) => handleInputChange('content', content)}
+                onCancel={() => {}}
+              />
             </div>
-          </div>
-        )}
+          )}
 
-        <div className="flex justify-end space-x-3 pt-4">
-          <Button
-            variant="outline"
-            onClick={onClose}
-            disabled={loading}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            loading={loading}
-          >
-            {prompt ? 'Update Prompt' : 'Create Prompt'}
-          </Button>
-        </div>
+          {formData.type === PromptType.SEED && (
+            <div>
+              <Text size="sm" fw={500} mb="xs">Conversation Messages</Text>
+              <SeedPromptEditor
+                value={seedData}
+                onChange={(data) => {
+                  setSeedData(data);
+                  // Convert seed data to JSON format for llm chat
+                  handleInputChange('content', JSON.stringify(data.messages, null, 2));
+                }}
+              />
+            </div>
+          )}
+
+          <Group justify="space-between" pt="md">
+            <Group>
+              {prompt && onDelete && (
+                <Button
+                  variant="outline"
+                  color="red"
+                  onClick={() => {
+                    if (confirm(`Are you sure you want to delete prompt "${prompt.name}"?`)) {
+                      onDelete(prompt.name);
+                    }
+                  }}
+                  disabled={loading}
+                >
+                  Delete
+                </Button>
+              )}
+            </Group>
+            <Group>
+              <Button
+                variant="outline"
+                onClick={onClose}
+                disabled={loading}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                loading={loading}
+              >
+                {prompt ? 'Update Prompt' : 'Create Prompt'}
+              </Button>
+            </Group>
+          </Group>
+        </Stack>
       </form>
     </Modal>
   );

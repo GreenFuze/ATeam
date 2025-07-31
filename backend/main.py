@@ -19,6 +19,8 @@ from agent_manager import AgentManager
 from tool_manager import ToolManager
 from prompt_manager import PromptManager
 from provider_manager import ProviderManager
+from models_manager import ModelsManager
+from schema_manager import SchemaManager
 from llm_interface import LLMInterface
 from chat_engine import ChatEngine
 from monitoring import monitor_performance, performance_monitor, error_tracker
@@ -28,6 +30,8 @@ agent_manager = AgentManager("agents.yaml")
 tool_manager = ToolManager("tools.yaml")
 prompt_manager = PromptManager("prompts")
 provider_manager = ProviderManager("providers.yaml")
+models_manager = ModelsManager("models.yaml")
+schema_manager = SchemaManager("schemas")
 llm_interface = LLMInterface()
 chat_engine = ChatEngine(agent_manager, tool_manager, prompt_manager, llm_interface)
 
@@ -124,7 +128,7 @@ async def get_agent(agent_id: str):
 async def create_agent(agent_request: Dict[str, Any]):
     """Create a new agent"""
     try:
-        from models import CreateAgentRequest
+        from schemas import CreateAgentRequest
         create_request = CreateAgentRequest(**agent_request)
         agent_id = agent_manager.create_agent(create_request)
         return {"agent_id": agent_id, "message": "Agent created successfully"}
@@ -226,10 +230,12 @@ async def delete_tool(tool_name: str):
 @app.get("/api/providers")
 @monitor_performance("get_all_providers")
 async def get_all_providers():
-    """Get all providers"""
+    """Get all providers including discovered ones"""
     try:
-        providers = provider_manager.get_all_providers()
-        return {"providers": providers}
+        providers = provider_manager.get_all_providers_with_discovery()
+        # Convert ProviderInfoView objects to dictionaries for JSON serialization
+        providers_dict = [provider.model_dump() for provider in providers]
+        return {"providers": providers_dict}
     except Exception as e:
         error_tracker.track_error(e, {"endpoint": "get_all_providers"})
         raise HTTPException(status_code=500, detail=str(e))
@@ -267,12 +273,90 @@ async def get_provider_models(provider_name: str):
 @app.get("/api/models")
 @monitor_performance("get_all_models")
 async def get_all_models():
-    """Get all models from models.yaml"""
+    """Get all models with discovery"""
     try:
-        models = llm_interface.available_models
-        return {"models": models}
+        models = models_manager.get_all_models_with_discovery()
+        return {"models": [model.model_dump() for model in models]}
     except Exception as e:
         error_tracker.track_error(e, {"endpoint": "get_all_models"})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/models/{model_id}")
+@monitor_performance("get_model")
+async def get_model(model_id: str):
+    """Get specific model details"""
+    try:
+        model = models_manager.get_model(model_id)
+        if not model:
+            raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
+        return {"model": model.model_dump()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "get_model", "model_id": model_id})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/models/{model_id}")
+@monitor_performance("update_model")
+async def update_model(model_id: str, model_config: Dict[str, Any]):
+    """Update model or create it if it doesn't exist"""
+    try:
+        # Check if model exists in configuration
+        existing_model = models_manager.get_model(model_id)
+        
+        if existing_model:
+            # Update existing model
+            models_manager.update_model(model_id, model_config)
+            return {"message": "Model updated successfully"}
+        else:
+            # Create new model with discovered info
+            discovered_models = models_manager.discover_models_from_llm()
+            discovered_info = discovered_models.get(model_id)
+            
+            if discovered_info:
+                # Merge discovered info with provided configuration
+                new_model_config = {
+                    'id': model_id,
+                    'name': model_config.get('name', discovered_info.get('name', model_id)),
+                    'provider': model_config.get('provider', discovered_info.get('provider', 'unknown')),
+                    'description': model_config.get('description', discovered_info.get('description', f'{model_id} model')),
+                    'model_settings': model_config.get('model_settings', {}),
+                    'default_inference': model_config.get('default_inference', {})
+                }
+                
+                models_manager.create_model(new_model_config)
+                return {"message": "Model created successfully"}
+            else:
+                raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found and not discovered")
+                
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "update_model", "model_id": model_id})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/models/{model_id}")
+@monitor_performance("delete_model")
+async def delete_model(model_id: str):
+    """Delete model configuration"""
+    try:
+        models_manager.delete_model(model_id)
+        return {"message": "Model deleted successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "delete_model", "model_id": model_id})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/models/{model_id}/settings")
+@monitor_performance("get_model_settings")
+async def get_model_settings(model_id: str):
+    """Get available settings schema for model"""
+    try:
+        schema = models_manager.get_model_settings_schema(model_id)
+        return {"schema": schema}
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "get_model_settings", "model_id": model_id})
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/providers")
@@ -289,10 +373,36 @@ async def create_provider(provider_config: Dict[str, Any]):
 @app.put("/api/providers/{provider_name}")
 @monitor_performance("update_provider")
 async def update_provider(provider_name: str, provider_config: Dict[str, Any]):
-    """Update a provider"""
+    """Update a provider or create it if it doesn't exist"""
     try:
-        provider_manager.update_provider(provider_name, provider_config)
-        return {"message": "Provider updated successfully"}
+        # Check if provider exists in configuration
+        existing_provider = provider_manager.get_provider(provider_name)
+        
+        if existing_provider:
+            # Update existing provider
+            provider_manager.update_provider(provider_name, provider_config)
+            return {"message": "Provider updated successfully"}
+        else:
+            # Create new provider with discovered info
+            discovered_providers = provider_manager.discover_providers_from_llm()
+            discovered_info = discovered_providers.get(provider_name)
+            
+            if discovered_info:
+                # Merge discovered info with provided configuration
+                new_provider_config = {
+                    'name': provider_name,
+                    'display_name': discovered_info.get('display_name', provider_name.title()),
+                    'description': discovered_info.get('description', f'{provider_name.title()} provider'),
+                    'api_key_required': provider_config.get('api_key_required', discovered_info.get('api_key_required', False)),
+                    'api_key_env_var': provider_config.get('api_key_env_var', discovered_info.get('api_key_env_var')),
+                    'base_url': provider_config.get('base_url', discovered_info.get('base_url'))
+                }
+                
+                provider_manager.create_provider(new_provider_config)
+                return {"message": "Provider created successfully"}
+            else:
+                raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' not found and not discovered")
+                
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -363,7 +473,7 @@ async def get_prompt(prompt_name: str):
 async def create_prompt(prompt_config: Dict[str, Any]):
     """Create a new prompt"""
     try:
-        from models import CreatePromptRequest
+        from schemas import CreatePromptRequest
         create_request = CreatePromptRequest(**prompt_config)
         prompt_name = prompt_manager.create_prompt(
             create_request.name, 
@@ -380,8 +490,18 @@ async def create_prompt(prompt_config: Dict[str, Any]):
 async def update_prompt(prompt_name: str, prompt_config: Dict[str, Any]):
     """Update a prompt"""
     try:
-        content = prompt_config.get("content", "")
-        prompt_manager.update_prompt(prompt_name, content)
+        from schemas import UpdatePromptRequest
+        update_request = UpdatePromptRequest(**prompt_config)
+        
+        # Handle rename if name is different
+        new_name = update_request.name if update_request.name != prompt_name else None
+        
+        prompt_manager.update_prompt(
+            prompt_name, 
+            update_request.content, 
+            new_name, 
+            update_request.type
+        )
         return {"message": "Prompt updated successfully"}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -400,6 +520,107 @@ async def delete_prompt(prompt_name: str):
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         error_tracker.track_error(e, {"endpoint": "delete_prompt", "prompt_name": prompt_name})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/prompts/{prompt_name}/seed")
+@monitor_performance("get_seed_prompt")
+async def get_seed_prompt(prompt_name: str):
+    """Get a seed prompt as structured data"""
+    try:
+        messages = prompt_manager.parse_seed_prompt(prompt_name)
+        return {"messages": [msg.model_dump() for msg in messages]}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "get_seed_prompt", "prompt_name": prompt_name})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/prompts/{prompt_name}/seed")
+@monitor_performance("update_seed_prompt")
+async def update_seed_prompt(prompt_name: str, seed_data: Dict[str, Any]):
+    """Update a seed prompt with structured data"""
+    try:
+        from schemas import SeedPromptData
+        seed_request = SeedPromptData(**seed_data)
+        prompt_manager.update_seed_prompt(prompt_name, seed_request.messages)
+        return {"message": "Seed prompt updated successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "update_seed_prompt", "prompt_name": prompt_name})
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Schema endpoints
+@app.get("/api/schemas")
+@monitor_performance("get_all_schemas")
+async def get_all_schemas():
+    """Get all schemas"""
+    try:
+        schemas = schema_manager.get_all_schemas()
+        return {"schemas": schemas}
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "get_all_schemas"})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/schemas/{schema_name}")
+@monitor_performance("get_schema")
+async def get_schema(schema_name: str):
+    """Get a specific schema"""
+    try:
+        schema = schema_manager.get_schema(schema_name)
+        if not schema:
+            raise HTTPException(status_code=404, detail="Schema not found")
+        return schema
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "get_schema", "schema_name": schema_name})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/schemas")
+@monitor_performance("create_schema")
+async def create_schema(schema_config: Dict[str, Any]):
+    """Create a new schema"""
+    try:
+        schema_name = schema_config.get("name")
+        schema_content = schema_config.get("content", {})
+        
+        if not schema_name:
+            raise HTTPException(status_code=400, detail="Schema name is required")
+        
+        created_name = schema_manager.create_schema(schema_name, schema_content)
+        return {"message": "Schema created successfully", "name": created_name}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "create_schema"})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/schemas/{schema_name}")
+@monitor_performance("update_schema")
+async def update_schema(schema_name: str, schema_config: Dict[str, Any]):
+    """Update a schema"""
+    try:
+        schema_content = schema_config.get("content", {})
+        schema_manager.update_schema(schema_name, schema_content)
+        return {"message": "Schema updated successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "update_schema", "schema_name": schema_name})
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/schemas/{schema_name}")
+@monitor_performance("delete_schema")
+async def delete_schema(schema_name: str):
+    """Delete a schema"""
+    try:
+        schema_manager.delete_schema(schema_name)
+        return {"message": "Schema deleted successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        error_tracker.track_error(e, {"endpoint": "delete_schema", "schema_name": schema_name})
         raise HTTPException(status_code=500, detail=str(e))
 
 # Chat endpoints

@@ -1,93 +1,321 @@
-# ATeam LLM Models Configuration
-# This file defines the available LLM models and their capabilities
-
 models:
-  # OpenAI Models
   gpt-4:
-    name: "GPT-4"
-    provider: "openai"
-    supports_schema: true
-    supports_grammar: true
-    max_tokens: 8192
-    description: "OpenAI's most capable model for complex reasoning tasks"
-    
-  gpt-4-turbo:
-    name: "GPT-4 Turbo"
-    provider: "openai"
-    supports_schema: true
-    supports_grammar: true
-    max_tokens: 128000
-    description: "Latest GPT-4 model with improved performance and larger context"
-    
-  gpt-3.5-turbo:
-    name: "GPT-3.5 Turbo"
-    provider: "openai"
-    supports_schema: false
-    supports_grammar: false
-    max_tokens: 4096
-    description: "Fast and efficient model for most tasks"
-    
-  # Anthropic Models
-  claude-3-opus:
-    name: "Claude 3 Opus"
-    provider: "anthropic"
-    supports_schema: true
-    supports_grammar: false
-    max_tokens: 200000
-    description: "Anthropic's most capable model for complex reasoning"
-    
-  claude-3-sonnet:
-    name: "Claude 3 Sonnet"
-    provider: "anthropic"
-    supports_schema: true
-    supports_grammar: false
-    max_tokens: 200000
-    description: "Balanced performance and speed for most tasks"
-    
-  claude-3-haiku:
-    name: "Claude 3 Haiku"
-    provider: "anthropic"
-    supports_schema: false
-    supports_grammar: false
-    max_tokens: 200000
-    description: "Fast and cost-effective model for simple tasks"
-    
-  # Local Models
-  llama-3.1-8b:
-    name: "Llama 3.1 8B"
-    provider: "local"
-    supports_schema: false
-    supports_grammar: false
-    max_tokens: 8192
-    description: "Local Llama model for privacy-sensitive tasks"
-    
-  llama-3.1-70b:
-    name: "Llama 3.1 70B"
-    provider: "local"
-    supports_schema: false
-    supports_grammar: false
-    max_tokens: 8192
-    description: "Large local Llama model for complex reasoning"
-    
-  # Google Models
-  gemini-pro:
-    name: "Gemini Pro"
-    provider: "google"
-    supports_schema: true
-    supports_grammar: false
-    max_tokens: 32768
-    description: "Google's advanced reasoning model"
-    
-  gemini-flash:
-    name: "Gemini Flash"
-    provider: "google"
-    supports_schema: false
-    supports_grammar: false
-    max_tokens: 32768
-    description: "Fast and efficient Google model"
+    context_window_size: 8192      # GPT‑4 base: 8 K context window :contentReference[oaicite:1]{index=1}
+    default_inference:
+      max_tokens: 4096             # max output tokens ~4 K :contentReference[oaicite:2]{index=2}
+      stream: true
+    description: gpt‑4 model from openai
+    id: gpt-4
+    model_settings: {}
+    name: gpt-4
+    provider: openai
 
-# Default model configuration
-defaults:
-  model: "gpt-4-turbo"
-  temperature: 0.7
-  max_tokens: 4096
+  gpt-4-32k:
+    context_window_size: 32768     # GPT‑4‑32K variant: 32 K tokens :contentReference[oaicite:3]{index=3}
+    default_inference:
+      max_tokens: 4096             # still capped at ~4 K output :contentReference[oaicite:4]{index=4}
+      stream: true
+    description: gpt‑4-32k model from openai
+    id: gpt-4-32k
+    model_settings: {}
+    name: gpt-4-32k
+    provider: openai
+
+  gpt-3.5-turbo:
+    context_window_size: 16385     # ~16 K window for GPT‑3.5 Turbo :contentReference[oaicite:5]{index=5}
+    default_inference:
+      max_tokens: 4096             # ~4 K output cap :contentReference[oaicite:6]{index=6}
+      stream: true
+    description: gpt‑3.5-turbo model from openai
+    id: gpt-3.5-turbo
+    model_settings: {}
+    name: gpt-3.5-turbo
+    provider: openai
+
+  gpt-3.5-turbo-16k:
+    context_window_size: 16385     # same ~16 K window :contentReference[oaicite:7]{index=7}
+    default_inference:
+      max_tokens: 4096
+      stream: true
+    description: gpt‑3.5-turbo-16k model from openai
+    id: gpt-3.5-turbo-16k
+    model_settings: {}
+    name: gpt-3.5-turbo-16k
+    provider: openai
+
+  gpt-4-turbo:
+    context_window_size: 128000    # GPT‑4 Turbo supports 128 K context window :contentReference[oaicite:8]{index=8}
+    default_inference:
+      max_tokens: 16384            # output capped ~16 K tokens :contentReference[oaicite:9]{index=9}
+      stream: true
+    description: gpt‑4-turbo model from openai
+    id: gpt-4-turbo
+    model_settings: {}
+    name: gpt-4-turbo
+    provider: openai
+
+  gpt-4o:
+    context_window_size: 128000    # GPT‑4o family supports 128 K window :contentReference[oaicite:10]{index=10}
+    default_inference:
+      json_object: false
+      max_tokens: 16384
+      stream: true
+    description: gpt‑4o model from openai
+    id: gpt-4o
+    model_settings: {}
+    name: gpt-4o
+    provider: openai
+
+  gpt-4o-mini:
+    context_window_size: 128000    # same as GPT‑4o mini :contentReference[oaicite:11]{index=11}
+    default_inference:
+      max_tokens: 16384
+      stream: true
+      temperature: 0.3
+    description: gpt‑4o-mini model from openai
+    id: gpt-4o-mini
+    model_settings: {}
+    name: gpt-4o-mini
+    provider: openai
+
+  chatgpt-4o-latest:
+    context_window_size: 128000
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: chatgpt‑4o‑latest model from openai
+    id: chatgpt-4o-latest
+    model_settings: {}
+    name: chatgpt-4o-latest
+    provider: openai
+
+  gpt-4o-audio-preview:
+    context_window_size: 128000
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt‑4o‑audio‑preview model from openai
+    id: gpt-4o-audio-preview
+    model_settings: {}
+    name: gpt-4o-audio-preview
+    provider: openai
+
+  gpt-4o-audio-preview-2024-12-17:
+    context_window_size: 128000
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt‑4o‑audio‑preview‑2024‑12‑17 model from openai
+    id: gpt-4o-audio-preview-2024-12-17
+    model_settings: {}
+    name: gpt-4o-audio-preview-2024-12-17
+    provider: openai
+
+  gpt-4o-audio-preview-2024-10-01:
+    context_window_size: 128000
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt‑4o‑audio‑preview‑2024‑10‑01 model from openai
+    id: gpt-4o-audio-preview-2024-10-01
+    model_settings: {}
+    name: gpt-4o-audio-preview-2024-10-01
+    provider: openai
+
+  gpt-4o-mini-audio-preview:
+    context_window_size: 128000
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt‑4o‑mini‑audio‑preview model from openai
+    id: gpt-4o-mini-audio-preview
+    model_settings: {}
+    name: gpt-4o-mini-audio-preview
+    provider: openai
+
+  gpt-4o-mini-audio-preview-2024-12-17:
+    context_window_size: 128000
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt‑4o‑mini‑audio‑preview‑2024‑12‑17 model from openai
+    id: gpt-4o-mini-audio-preview-2024-12-17
+    model_settings: {}
+    name: gpt-4o-mini-audio-preview-2024-12-17
+    provider: openai
+
+  gpt-4.1:
+    context_window_size: 1047576   # flag‑ship GPT‑4.1: 1,047,576 (~1M) token window :contentReference[oaicite:12]{index=12}
+    default_inference:
+      max_tokens: 32768            # output max tokens: 32,768 confirmed :contentReference[oaicite:13]{index=13}
+      stream: true
+    description: gpt‑4.1 model from openai
+    id: gpt-4.1
+    model_settings: {}
+    name: gpt-4.1
+    provider: openai
+
+  gpt-4.1-mini:
+    context_window_size: 1047576   # same window for mini variant :contentReference[oaicite:14]{index=14}
+    default_inference:
+      max_tokens: 32768
+      stream: true
+    description: gpt‑4.1‑mini model from openai
+    id: gpt-4.1-mini
+    model_settings: {}
+    name: gpt-4.1-mini
+    provider: openai
+
+  gpt-4.1-nano:
+    context_window_size: 1047576   # nano also supports full 1M token window :contentReference[oaicite:15]{index=15}
+    default_inference:
+      max_tokens: 32768
+      stream: true
+    description: gpt‑4.1‑nano model from openai
+    id: gpt-4.1-nano
+    model_settings: {}
+    name: gpt-4.1-nano
+    provider: openai
+
+  o1:
+    context_window_size: 200000    # e.g. o1-pro supports 200 K window :contentReference[oaicite:16]{index=16}
+    default_inference:
+      max_tokens: 100000           # supports up to 100 K output tokens :contentReference[oaicite:17]{index=17}
+      stream: false
+    description: o1 model from openai
+    id: o1
+    model_settings: {}
+    name: o1
+    provider: openai
+
+  o1-2024-12-17:
+    context_window_size: 200000
+    default_inference:
+      max_tokens: 100000
+      stream: false
+    description: o1‑2024‑12‑17 model from openai
+    id: o1-2024-12-17
+    model_settings: {}
+    name: o1-2024-12-17
+    provider: openai
+
+  o1-preview:
+    context_window_size: 200000
+    default_inference:
+      max_tokens: 100000
+      stream: true
+    description: o1‑preview model from openai
+    id: o1-preview
+    model_settings: {}
+    name: o1-preview
+    provider: openai
+
+  o1-mini:
+    context_window_size: 200000
+    default_inference:
+      max_tokens: 100000
+      stream: true
+    description: o1‑mini model from openai
+    id: o1-mini
+    model_settings: {}
+    name: o1-mini
+    provider: openai
+
+  o3-mini:
+    context_window_size: 128000    # likely same as long‑context series
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: o3‑mini model from openai
+    id: o3-mini
+    model_settings: {}
+    name: o3-mini
+    provider: openai
+
+  o3:
+    context_window_size: 128000
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: o3 model from openai
+    id: o3
+    model_settings: {}
+    name: o3
+    provider: openai
+
+  o4-mini:
+    context_window_size: 128000
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: o4-mini model from openai
+    id: o4-mini
+    model_settings: {}
+    name: o4-mini
+    provider: openai
+
+  gpt-3.5-turbo-instruct:
+    context_window_size: 16385
+    default_inference:
+      max_tokens: 4096
+      stream: true
+    description: gpt‑3.5‑turbo‑instruct model from openai
+    id: gpt-3.5-turbo-instruct
+    model_settings: {}
+    name: gpt-3.5-turbo-instruct
+    provider: openai
+
+  gpt-4-1106-preview:
+    context_window_size: 128000    # GPT-4 Turbo preview with 128K context window
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt-4-1106-preview model from openai
+    id: gpt-4-1106-preview
+    model_settings: {}
+    name: gpt-4-1106-preview
+    provider: openai
+
+  gpt-4-0125-preview:
+    context_window_size: 128000    # GPT-4 Turbo preview with 128K context window
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt-4-0125-preview model from openai
+    id: gpt-4-0125-preview
+    model_settings: {}
+    name: gpt-4-0125-preview
+    provider: openai
+
+  gpt-4-turbo-2024-04-09:
+    context_window_size: 128000    # GPT-4 Turbo with 128K context window
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt-4-turbo-2024-04-09 model from openai
+    id: gpt-4-turbo-2024-04-09
+    model_settings: {}
+    name: gpt-4-turbo-2024-04-09
+    provider: openai
+
+  gpt-4.5-preview-2025-02-27:
+    context_window_size: 128000    # GPT-4.5 preview with 128K context window
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt-4.5-preview-2025-02-27 model from openai
+    id: gpt-4.5-preview-2025-02-27
+    model_settings: {}
+    name: gpt-4.5-preview-2025-02-27
+    provider: openai
+
+  gpt-4.5-preview:
+    context_window_size: 128000    # GPT-4.5 preview with 128K context window
+    default_inference:
+      max_tokens: 16384
+      stream: true
+    description: gpt-4.5-preview model from openai
+    id: gpt-4.5-preview
+    model_settings: {}
+    name: gpt-4.5-preview
+    provider: openai

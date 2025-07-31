@@ -9,6 +9,7 @@ from typing import AsyncGenerator, Dict, Any, Optional
 from fastapi import WebSocket
 from llm_interface import LLMInterface
 
+
 class StreamingResponse:
     def __init__(self, llm_interface: LLMInterface):
         self.llm_interface = llm_interface

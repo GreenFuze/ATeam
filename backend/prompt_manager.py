@@ -1,7 +1,8 @@
 import os
 import markdown
+import yaml
 from typing import Dict, List, Optional, Any
-from models import PromptConfig, PromptType
+from schemas import PromptConfig, PromptType, SeedMessage, SeedPromptData
 from datetime import datetime
 import json
 
@@ -9,6 +10,7 @@ class PromptManager:
     def __init__(self, prompts_dir: str = "prompts"):
         self.prompts_dir = prompts_dir
         self.prompts: Dict[str, PromptConfig] = {}
+        self.prompts_yaml_path = "prompts.yaml"
         self.load_prompts()
         
     def load_prompts(self):
@@ -18,6 +20,9 @@ class PromptManager:
             os.makedirs(self.prompts_dir, exist_ok=True)
             print(f"Created prompts directory: {self.prompts_dir}")
             return  # Empty prompts directory is OK
+        
+        # Load metadata from prompts.yaml if it exists
+        prompts_metadata = self._load_prompts_metadata()
         
         # Load existing prompts (empty directory is OK)
         for filename in os.listdir(self.prompts_dir):
@@ -29,8 +34,11 @@ class PromptManager:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    # Try to extract metadata from frontmatter or filename
-                    prompt_type = self._determine_prompt_type(filename, content)
+                    # Get prompt type from metadata or fallback to filename analysis
+                    if prompt_name in prompts_metadata:
+                        prompt_type = PromptType(prompts_metadata[prompt_name]['type'])
+                    else:
+                        prompt_type = self._determine_prompt_type(filename, content)
                     
                     prompt_config = PromptConfig(
                         name=prompt_name,
@@ -54,8 +62,6 @@ class PromptManager:
             return PromptType.SYSTEM
         elif "seed" in filename_lower:
             return PromptType.SEED
-        elif "agent" in filename_lower:
-            return PromptType.AGENT
         else:
             # Default to system if can't determine
             return PromptType.SYSTEM
@@ -99,6 +105,9 @@ class PromptManager:
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(content)
         
+        # Update metadata
+        self._update_prompt_metadata(name, prompt_type)
+        
         # Create prompt config
         now = datetime.now().isoformat()
         prompt_config = PromptConfig(
@@ -114,7 +123,7 @@ class PromptManager:
         
         return name
     
-    def update_prompt(self, name: str, content: str):
+    def update_prompt(self, name: str, content: str, new_name: Optional[str] = None, prompt_type: Optional[PromptType] = None):
         """Update an existing prompt"""
         # Ensure name has .md extension
         if not name.endswith('.md'):
@@ -123,14 +132,57 @@ class PromptManager:
         if name not in self.prompts:
             raise ValueError(f"Prompt '{name}' not found")
         
-        # Update file
-        file_path = os.path.join(self.prompts_dir, name)
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        # Update config
-        self.prompts[name].content = content
-        self.prompts[name].updated_at = datetime.now().isoformat()
+        # Handle rename if new_name is provided
+        if new_name and new_name != name:
+            if not new_name.endswith('.md'):
+                new_name = f"{new_name}.md"
+            
+            # Check if new name already exists
+            if new_name in self.prompts:
+                raise ValueError(f"Prompt '{new_name}' already exists")
+            
+            # Rename file
+            old_file_path = os.path.join(self.prompts_dir, name)
+            new_file_path = os.path.join(self.prompts_dir, new_name)
+            os.rename(old_file_path, new_file_path)
+            
+            # Update metadata
+            if prompt_type:
+                self._update_prompt_metadata(new_name, prompt_type)
+            
+            # Remove old metadata
+            metadata = self._load_prompts_metadata()
+            if name in metadata:
+                del metadata[name]
+                self._save_prompts_metadata(metadata)
+            
+            # Update collection
+            prompt_config = self.prompts[name]
+            prompt_config.name = new_name
+            prompt_config.content = content
+            if prompt_type:
+                prompt_config.type = prompt_type
+            prompt_config.updated_at = datetime.now().isoformat()
+            
+            # Move to new key
+            self.prompts[new_name] = prompt_config
+            del self.prompts[name]
+            
+        else:
+            # Update file
+            file_path = os.path.join(self.prompts_dir, name)
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            
+            # Update metadata if type changed
+            if prompt_type and prompt_type != self.prompts[name].type:
+                self._update_prompt_metadata(name, prompt_type)
+            
+            # Update config
+            self.prompts[name].content = content
+            if prompt_type:
+                self.prompts[name].type = prompt_type
+            self.prompts[name].updated_at = datetime.now().isoformat()
     
     def delete_prompt(self, name: str):
         """Delete a prompt file"""
@@ -145,6 +197,12 @@ class PromptManager:
         file_path = os.path.join(self.prompts_dir, name)
         if os.path.exists(file_path):
             os.remove(file_path)
+        
+        # Remove from metadata
+        metadata = self._load_prompts_metadata()
+        if name in metadata:
+            del metadata[name]
+            self._save_prompts_metadata(metadata)
         
         # Remove from collection
         del self.prompts[name]
@@ -174,4 +232,91 @@ class PromptManager:
                 query_lower in prompt.type.value.lower()):
                 results.append(prompt)
         
-        return results 
+        return results
+    
+    def _load_prompts_metadata(self) -> Dict[str, Dict[str, str]]:
+        """Load prompts metadata from prompts.yaml file"""
+        if not os.path.exists(self.prompts_yaml_path):
+            return {}
+        
+        try:
+            with open(self.prompts_yaml_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+                return data.get('prompts', {})
+        except Exception as e:
+            print(f"Error loading prompts metadata: {e}")
+            return {}
+    
+    def _save_prompts_metadata(self, metadata: Dict[str, Dict[str, str]]):
+        """Save prompts metadata to prompts.yaml file"""
+        try:
+            # Ensure directory exists
+            dir_path = os.path.dirname(self.prompts_yaml_path)
+            if dir_path and not os.path.exists(dir_path):
+                os.makedirs(dir_path, exist_ok=True)
+            
+            with open(self.prompts_yaml_path, 'w', encoding='utf-8') as f:
+                yaml.dump({'prompts': metadata}, f, default_flow_style=False, indent=2)
+        except Exception as e:
+            print(f"Error saving prompts metadata: {e}")
+            raise
+    
+    def _update_prompt_metadata(self, prompt_name: str, prompt_type: PromptType):
+        """Update prompts metadata in prompts.yaml"""
+        metadata = self._load_prompts_metadata()
+        metadata[prompt_name] = {'type': prompt_type.value}
+        self._save_prompts_metadata(metadata)
+    
+    def create_seed_prompt(self, name: str, messages: List[SeedMessage]) -> str:
+        """Create a seed prompt from a list of messages"""
+        # Convert messages to JSON format for llm chat
+        content = json.dumps([msg.dict() for msg in messages], indent=2)
+        return self.create_prompt(name, content, PromptType.SEED)
+    
+    def update_seed_prompt(self, name: str, messages: List[SeedMessage]):
+        """Update a seed prompt with new messages"""
+        # Convert messages to JSON format for llm chat
+        content = json.dumps([msg.dict() for msg in messages], indent=2)
+        self.update_prompt(name, content)
+    
+    def parse_seed_prompt(self, name: str) -> List[SeedMessage]:
+        """Parse a seed prompt and return list of messages"""
+        prompt = self.get_prompt(name)
+        if not prompt or prompt.type != PromptType.SEED:
+            raise ValueError(f"Prompt '{name}' is not a seed prompt")
+        
+        try:
+            # Try to parse as JSON first (new format)
+            messages_data = json.loads(prompt.content)
+            return [SeedMessage(**msg) for msg in messages_data]
+        except (json.JSONDecodeError, TypeError):
+            # Fallback to old markdown format for backward compatibility
+            messages = []
+            lines = prompt.content.split('\n')
+            current_role = None
+            current_content = []
+            
+            for line in lines:
+                if line.startswith('## '):
+                    # Save previous message if exists
+                    if current_role and current_content:
+                        messages.append(SeedMessage(
+                            role=current_role.lower(),
+                            content='\n'.join(current_content).strip()
+                        ))
+                    
+                    # Start new message
+                    current_role = line[3:].strip().lower()
+                    current_content = []
+                else:
+                    if current_role:
+                        current_content.append(line)
+            
+            # Add last message
+            if current_role and current_content:
+                messages.append(SeedMessage(
+                    role=current_role.lower(),
+                    content='\n'.join(current_content).strip()
+                ))
+            
+            return messages 

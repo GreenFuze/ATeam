@@ -43,17 +43,14 @@ const PromptManager: React.FC = () => {
   };
 
   const handleDeletePrompt = async (promptName: string) => {
-    if (!confirm(`Are you sure you want to delete prompt "${promptName}"?`)) {
-      return;
-    }
-
     try {
-      // Note: Delete endpoint would need to be implemented in the backend
+      await promptsApi.delete(promptName);
       notifications.show({
-        title: 'Info',
-        message: 'Prompt deletion not yet implemented',
-        color: 'blue',
+        title: 'Success',
+        message: 'Prompt deleted successfully',
+        color: 'green',
       });
+      loadPrompts();
     } catch (error) {
       console.error('Error deleting prompt:', error);
       notifications.show({
@@ -69,7 +66,7 @@ const PromptManager: React.FC = () => {
       setLoading(true);
       
       if (selectedPrompt) {
-        await promptsApi.update(selectedPrompt.name, promptData.content);
+        await promptsApi.update(selectedPrompt.name, promptData.content, promptData.name, promptData.type);
         notifications.show({
           title: 'Success',
           message: 'Prompt updated successfully',
@@ -104,8 +101,6 @@ const PromptManager: React.FC = () => {
         return '🔧';
       case PromptType.SEED:
         return '🌱';
-      case PromptType.AGENT:
-        return '🤖';
       default:
         return '📄';
     }
@@ -117,8 +112,6 @@ const PromptManager: React.FC = () => {
         return 'text-blue-600 bg-blue-100';
       case PromptType.SEED:
         return 'text-green-600 bg-green-100';
-      case PromptType.AGENT:
-        return 'text-purple-600 bg-purple-100';
       default:
         return 'text-gray-600 bg-gray-100';
     }
@@ -247,6 +240,7 @@ const PromptManager: React.FC = () => {
           setSelectedPrompt(null);
         }}
         onSave={handleSavePrompt}
+        onDelete={handleDeletePrompt}
         loading={loading}
       />
     </div>

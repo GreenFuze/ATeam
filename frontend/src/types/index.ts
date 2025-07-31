@@ -10,8 +10,7 @@ export enum MessageType {
 
 export enum PromptType {
   SYSTEM = "system",
-  SEED = "seed",
-  AGENT = "agent"
+  SEED = "seed"
 }
 
 export interface NavigationItem {
@@ -53,6 +52,15 @@ export interface PromptConfig {
   type: PromptType;
   created_at?: string;
   updated_at?: string;
+}
+
+export interface SeedMessage {
+  role: string; // "user", "assistant", "system"
+  content: string;
+}
+
+export interface SeedPromptData {
+  messages: SeedMessage[];
 }
 
 export interface Message {

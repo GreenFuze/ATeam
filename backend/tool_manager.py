@@ -3,7 +3,7 @@ import os
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from models import ToolConfig
+from schemas import ToolConfig
 import json
 
 class ToolManager:

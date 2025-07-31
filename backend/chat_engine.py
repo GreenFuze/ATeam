@@ -2,7 +2,7 @@ import json
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from models import Message, ChatSession, LLMResponse, MessageType
+from schemas import Message, ChatSession, LLMResponse, MessageType
 import asyncio
 
 class ChatEngine:
@@ -360,8 +360,18 @@ class ChatEngine:
         if not agent:
             return 0.0
         
-        # Get max tokens for the agent's model
-        max_tokens = agent.max_tokens or self.llm_interface.get_max_tokens(agent.model)
+        # Get the model's context window size from models manager
+        # We need to import models_manager here to avoid circular imports
+        from models_manager import ModelsManager
+        models_manager = ModelsManager()
+        
+        # Get model info to check context window size
+        model_info = models_manager.get_model(agent.model)
+        if not model_info or not model_info.context_window_size:
+            # If no context window size is set, return 0 (N/A)
+            return 0.0
+        
+        context_window_size = model_info.context_window_size
         
         # Calculate total tokens in current conversation
         total_tokens = 0
@@ -370,8 +380,8 @@ class ChatEngine:
             total_tokens += len(message.content) // 4
         
         # Calculate percentage
-        if max_tokens <= 0:
+        if context_window_size <= 0:
             return 0.0
         
-        percentage = (total_tokens / max_tokens) * 100
+        percentage = (total_tokens / context_window_size) * 100
         return min(percentage, 100.0)  # Cap at 100% 
