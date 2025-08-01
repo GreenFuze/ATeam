@@ -199,6 +199,8 @@ const SettingsPage: React.FC = () => {
     setExpandedTools(newExpanded);
   };
 
+
+
   const handleEditProvider = async () => {
     if (!selectedProvider) return;
     

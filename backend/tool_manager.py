@@ -138,10 +138,16 @@ class ToolManager:
     
     def get_all_tools(self) -> List[Dict[str, Any]]:
         """Get all discovered tools"""
+        # Re-discover tools on each call to detect changes
+        self.tools = {}
+        self.discover_tools()
         return list(self.tools.values())
     
     def get_tool(self, tool_name: str) -> Optional[Dict[str, Any]]:
         """Get a specific tool by name"""
+        # Re-discover tools to ensure we have the latest data
+        self.tools = {}
+        self.discover_tools()
         return self.tools.get(tool_name)
     
     def get_tools_directory_path(self) -> str:

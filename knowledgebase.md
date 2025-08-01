@@ -40,9 +40,9 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 ### ✅ Core Features
 - **Multi-Agent System**: YAML-based agent configuration with full CRUD operations
 - **LLM Integration**: Full integration with `llm` package and multiple providers
-- **Tool System**: Dynamic Python tool loading and execution
+- **Tool System**: Dynamic Python tool loading and execution with signature extraction
 - **Real-time Communication**: WebSocket-based chat system
-- **Configuration Management**: YAML-based configuration files (agents.yaml, tools.yaml, providers.yaml, models.yaml, prompts.yaml)
+- **Configuration Management**: YAML-based configuration files (agents.yaml, providers.yaml, models.yaml, prompts.yaml)
 - **Provider Management**: Support for OpenAI, Anthropic, Google, and local models
 - **Dynamic Model Management**: Runtime discovery of models and their capabilities
 - **Schema Management**: JSON schema CRUD operations for structured outputs
@@ -75,6 +75,63 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 - **Dynamic Schema Extraction**: Runtime extraction of model inference settings without loading models
 
 ## Recent Enhancements
+
+### Enhanced Tool Management with Signature Display (July 2025)
+The tool management system has been significantly enhanced with dynamic discovery and comprehensive signature display capabilities:
+
+#### Key Features
+- **Dynamic Tool Discovery**: Automatic discovery of Python functions and classes from the tools directory
+- **Signature Extraction**: Complete function and method signatures with parameter types and return types
+- **YAML Configuration Removal**: Eliminated `tools.yaml` in favor of dynamic file system discovery
+- **Comprehensive UI Display**: Signatures shown in all tool views (Settings, ToolsPage, ToolViewer)
+- **Method Expansion**: Expandable class methods with individual signatures and descriptions
+- **Docstring Integration**: Automatic detection and display of function/method documentation
+- **Warning System**: Visual indicators for missing docstrings with helpful tooltips
+- **Type Safety**: Complete type safety with enhanced TypeScript interfaces
+- **Simplified Interface**: Clean UI without refresh buttons - users can use browser refresh to see new tools
+- **Dual-Capability Model Support**: Models supporting both chat and embedding capabilities now appear in both sections with original model names
+
+#### Technical Implementation
+- **Backend Changes**:
+  - Enhanced `ToolManager` with `_get_function_signature()` method using Python's `inspect.signature()`
+  - Dynamic discovery of public functions (not starting with `_`) and `llm.Toolbox` classes
+  - Signature extraction with automatic `self` parameter cleanup for methods
+  - Error handling with graceful fallback to `(...)` for signature extraction failures
+  - Removed all CRUD operations (create, update, delete) as tools are now read-only
+  - New API endpoint `/api/tools/directory/path` to expose tools directory location
+
+- **Frontend Changes**:
+  - Enhanced `ToolConfig` and `ToolMethod` interfaces with optional `signature` field
+  - Updated `SettingsPage.tsx` with signature display for functions and expandable method signatures
+  - Enhanced `ToolViewer.tsx` with dedicated signature sections for functions and methods
+  - Updated `ToolsPage.tsx` with signature display in tool cards and expanded method views
+  - Monospace font styling for signatures with proper visual hierarchy
+  - Removed "View" buttons and CRUD operations from tool interfaces
+  - Removed refresh buttons from both SettingsPage and ToolsPage - users can use browser refresh instead
+
+#### Tool Discovery Process
+- **Function Discovery**: Scans all `.py` files (excluding `__init__.py`) for public functions
+- **Class Discovery**: Identifies classes implementing `llm.Toolbox` interface
+- **Method Extraction**: Extracts all public methods from discovered classes
+- **Signature Analysis**: Uses `inspect.signature()` to extract complete function/method signatures
+- **Metadata Collection**: Gathers docstrings, file paths, and relative paths for display
+
+#### Signature Examples
+- **Function `add`**: `add(x: int, y: int) -> int`
+- **Memory Class Methods**:
+  - `append(key: str, value: str)`
+  - `get(key: str)`
+  - `keys()` (no parameters)
+  - `set(key: str, value: str)`
+
+#### User Experience Improvements
+- **Visual Hierarchy**: Signatures displayed in monospace font with dimmed styling
+- **Expandable Methods**: Chevron buttons to expand/collapse class method details
+- **Warning Indicators**: Orange warning triangles for missing docstrings
+- **Consistent Display**: Signatures shown across all tool viewing interfaces
+- **Directory Path Display**: Tools directory path shown below the "Available Tools" title
+- **Method Counts**: Clear indication of how many methods each class contains
+- **Simplified Interface**: Clean UI without refresh buttons - users can use browser refresh (F5) to see new tools
 
 ### Enhanced Prompt Management (July 2025)
 The prompt management system has been significantly enhanced with comprehensive editing capabilities and improved user experience:
@@ -127,19 +184,56 @@ The prompt management system has been significantly enhanced with comprehensive 
 - **Large Modal Support**: Modal can use up to 95% of screen height for extensive content
 - **Content Persistence**: Content properly loads and persists when switching between prompts
 
+### ✅ Draggable System Prompts in Agent Settings (August 2025)
+The agent settings dialog has been enhanced with a new draggable system prompts interface:
+
+#### Key Features
+- **Dropdown Selection**: Users can select system prompts from a dropdown list of available prompts
+- **Add/Remove Functionality**: Easy addition and removal of prompts with visual feedback
+- **Drag-and-Drop Reordering**: Prompts can be reordered by dragging and dropping
+- **Order Preservation**: The order of prompts is saved in agents.yaml and maintained during agent execution
+- **Visual Feedback**: Clear visual indicators for drag handles and remove buttons
+- **Empty State**: Helpful message when no prompts are selected
+
+#### Technical Implementation
+- **Frontend Changes**:
+  - Replaced checkbox-based system with dropdown + draggable list
+  - Added `@dnd-kit/core` and `@dnd-kit/sortable` for drag-and-drop functionality
+  - Created `SortablePromptItem` component with drag handle and remove button
+  - Implemented `DndContext` with proper sensors and collision detection
+  - Added state management for selected prompt to add and drag operations
+  - Enhanced UI with `ActionIcon` components for better user interaction
+  - Added `IconGripVertical` and `IconX` icons for intuitive user interaction
+  - Implemented `arrayMove` utility for smooth reordering operations
+
+- **User Experience**:
+  - Dropdown only shows prompts not already selected
+  - Drag handle (grip icon) for intuitive reordering
+  - Remove button (X icon) for easy prompt removal
+  - Card-based layout for better visual separation
+  - Responsive design that works on different screen sizes
+  - Increased max height (300px) for better visibility of prompt list
+  - Clear visual feedback with cursor changes and hover states
+
+#### Order Management
+- **Backend Integration**: Order is preserved in agents.yaml and used during agent execution
+- **Real-time Updates**: Changes are immediately reflected in the UI
+- **Validation**: Prevents duplicate prompts and handles edge cases
+- **Persistence**: Order is maintained across agent sessions and restarts
+
 ## File Organization
 - `backend/agents.yaml` - Agent configurations
-- `backend/tools.yaml` - Tool definitions (custom only)
 - `backend/providers.yaml` - LLM provider definitions (no models)
 - `backend/models.yaml` - Model configurations with provider references
 - `backend/prompts.yaml` - Prompt metadata (name, type) for persistence
 - `backend/prompts/` - Directory containing markdown prompt files
 - `backend/schemas/` - Directory containing JSON schema files
+- `backend/tools/` - Directory containing Python tool files (dynamically discovered)
 
 ### Backend Core Files
 - `backend/main.py` - FastAPI application with all endpoints and static file serving
 - `backend/agent_manager.py` - Agent lifecycle management (fixed delete path issue)
-- `backend/tool_manager.py` - Tool loading and execution
+- `backend/tool_manager.py` - Dynamic tool discovery and signature extraction
 - `backend/provider_manager.py` - LLM provider management with strict typing
 - `backend/models_manager.py` - Dynamic model discovery and settings management
 - `backend/schema_manager.py` - JSON schema CRUD operations
@@ -151,11 +245,13 @@ The prompt management system has been significantly enhanced with comprehensive 
 ### Frontend Structure
 - `frontend/src/components/Sidebar.tsx` - Two-tab sidebar (Agents/Settings) with notifications
 - `frontend/src/components/AgentsPage.tsx` - Agent list with empty state
-- `frontend/src/components/SettingsPage.tsx` - Settings with conditional rendering and model groups
+- `frontend/src/components/SettingsPage.tsx` - Settings with conditional rendering, model groups, and tool signature display
 - `frontend/src/components/AgentChat.tsx` - Enhanced chat interface with context tracking
-- `frontend/src/components/AgentSettingsModal.tsx` - Agent configuration modal with delete functionality
+- `frontend/src/components/AgentSettingsModal.tsx` - Agent configuration modal with draggable system prompts and delete functionality
 - `frontend/src/components/MessageDisplay.tsx` - Message rendering component
 - `frontend/src/components/ContextProgress.tsx` - Context window progress indicator with N/A state
+- `frontend/src/components/ToolViewer.tsx` - Tool detail modal with signature display
+- `frontend/src/pages/ToolsPage.tsx` - Dedicated tools page with expandable method signatures
 - `frontend/src/api/index.ts` - API client with proper response handling
 
 ## Current Implementation Status
@@ -189,6 +285,14 @@ The prompt management system has been significantly enhanced with comprehensive 
 26. **Type-Safe Data Handling**: Proper type conversion and validation throughout
 27. **Model Warning Icons**: Visual indicators for models without context window sizes
 28. **Streamlined Notifications**: Removed context window notifications from global system, replaced with model-specific warnings
+29. **Dynamic Tool Discovery**: Automatic discovery of Python functions and classes from tools directory
+30. **Tool Signature Display**: Complete function and method signatures with parameter types and return types
+31. **Method Expansion**: Expandable class methods with individual signatures and descriptions
+32. **Docstring Integration**: Automatic detection and display of function/method documentation
+33. **Tool Warning System**: Visual indicators for missing docstrings with helpful tooltips
+34. **Simplified Tool Interface**: Removed refresh buttons - users can use browser refresh to see new tools
+35. **Dual-Capability Model Support**: Models supporting both chat and embedding now appear in both sections with the same ID but different flags
+36. **Draggable System Prompts**: Agent settings now feature drag-and-drop reordering of system prompts with dropdown selection
 
 ### 🔄 Current State
 - **Application Running**: Server starts successfully on port 8000
@@ -202,6 +306,12 @@ The prompt management system has been significantly enhanced with comprehensive 
 - **Context Tracking**: Real-time context usage with N/A state for missing context windows
 - **Global Notifications**: System health monitoring with 0 warnings (all models configured)
 - **Model Warning Icons**: No warning icons displayed (all models have context window sizes)
+- **Dynamic Tools**: 2 tools discovered (add function, Memory class with 4 methods)
+- **Tool Signatures**: Complete function and method signatures displayed with parameter types
+- **Method Expansion**: Expandable class methods with individual signatures and descriptions
+- **Simplified Interface**: Clean UI without refresh buttons - browser refresh works for tool updates
+- **Dual-Capability Models**: `llama3.1:8b` now appears in both chat and embedding sections with the same ID but different flags
+- **Draggable System Prompts**: Agent settings feature drag-and-drop reordering with dropdown selection for system prompts
 
 ### 📋 Next Steps
 - Test all new features with real agent interactions
@@ -259,6 +369,20 @@ The prompt management system has been significantly enhanced with comprehensive 
   - **Provider Agnostic**: Works with any provider that exposes these attributes
 - **Impact**: Better model visibility, easier capability comparison, improved UX
 - **Status**: ✅ COMPLETE - All badges working and tested
+
+### ✅ Dual-Capability Model Support
+- **Root Cause**: Models that support both chat and embedding capabilities were only showing in one section
+- **Issue**: `llama3.1:8b` appeared only as embedding model despite supporting both chat and embedding
+- **Solution**: Modified model discovery to allow the same model ID to appear in both sections with different flags
+- **Implementation**:
+  - **Dual-Capability Detection**: Added `is_chat_model` and `is_embedding_model` flags during discovery
+  - **Same Model ID**: Models with both capabilities appear twice with the same ID but different `embedding_model` flags
+  - **Independent Configuration**: Each capability can be configured separately (e.g., different context window sizes)
+  - **No Artificial IDs**: Uses original model ID from `llm` (e.g., `llama3.1:8b`) instead of creating artificial IDs
+  - **Capability-Specific Settings**: Each entry gets appropriate inference settings schema
+  - **Frontend Separation**: Chat section shows models with `embedding_model: false`, embedding section shows `embedding_model: true`
+- **Impact**: Users can now configure dual-capability models independently for different use cases without artificial IDs
+- **Status**: ✅ COMPLETE - Dual-capability models now appear in both sections with original model names
 
 ### ✅ Model Settings Dialog Improvements
 - **Root Cause**: Need for better model configuration interface
@@ -454,6 +578,13 @@ The prompt management system has been significantly enhanced with comprehensive 
 5. **Provider Agnostic**: Works with any provider that exposes Options classes
 6. **No Model Loading**: Avoids memory issues and slow startup times
 
+### Dual-Capability Model Architecture
+1. **Same Model ID Approach**: Allow the same model ID to appear twice in the API response with different `embedding_model` flags
+2. **Frontend Separation**: Chat section filters for `embedding_model: false`, embedding section filters for `embedding_model: true`
+3. **No Artificial IDs**: Use original model names from `llm` instead of creating artificial IDs like `_chat` or `_embedding`
+4. **Independent Configuration**: Each capability can be configured separately with different settings
+5. **Clean Implementation**: Much simpler than complex ID extraction and artificial naming schemes
+
 ### Context Window Management
 1. **Real-time Calculation**: `_calculate_context_usage()` computes usage percentage
 2. **Model Integration**: Uses model's `context_window_size` from ModelsManager
@@ -543,10 +674,15 @@ The prompt management system has been significantly enhanced with comprehensive 
 - ❌ "Discovered" badges (all models are discovered)
 - ❌ "Configured" badges (replaced with "Default" badge logic)
 - ❌ Global context window notifications (replaced with model-specific warning icons)
+- ❌ `tools.yaml` configuration file (replaced with dynamic file system discovery)
+- ❌ Tool CRUD operations (create, update, delete) - tools are now read-only
+- ❌ "View" buttons for tools (replaced with inline signature display)
+- ❌ Refresh buttons for tools (users can use browser refresh instead)
+- ❌ Checkbox-based system prompts in agent settings (replaced with draggable dropdown system)
 
 ## Implementation Phases Status
 
-### ✅ Completed Phases (1-14)
+### ✅ Completed Phases (1-15)
 - **Phase 1-2**: Project structure, backend foundation, core features
 - **Phase 3-4**: Frontend foundation and advanced features
 - **Phase 5**: Integration and advanced features
@@ -559,6 +695,7 @@ The prompt management system has been significantly enhanced with comprehensive 
 - **Phase 12**: Dynamic model management and enhanced settings
 - **Phase 13**: Global notifications and context window integration
 - **Phase 14**: Model warning icons and complete OpenAI model configuration
+- **Phase 15**: Enhanced tool management with dynamic discovery and signature display
 
 ### 🎉 All Phases Complete
 - **Dynamic Model Management**: Complete runtime discovery and settings
@@ -569,6 +706,11 @@ The prompt management system has been significantly enhanced with comprehensive 
 - **Type Safety**: Comprehensive type handling throughout the system
 - **Model Warning System**: Targeted warnings for models needing configuration
 - **Complete Model Configuration**: All OpenAI models properly configured
+- **Dynamic Tool Discovery**: Automatic discovery of Python functions and classes
+- **Tool Signature Display**: Complete function and method signatures with parameter types
+- **Method Expansion**: Expandable class methods with individual signatures and descriptions
+- **Simplified Tool Interface**: Clean UI without refresh buttons - browser refresh for updates
+- **Docstring Integration**: Automatic detection and display of function/method documentation
 
 ## File Structure Summary
 
@@ -577,7 +719,7 @@ ATeam/
 ├── backend/
 │   ├── main.py                 # FastAPI application with frontend serving
 │   ├── agent_manager.py        # Agent management (fixed delete path issue)
-│   ├── tool_manager.py         # Tool system
+│   ├── tool_manager.py         # Dynamic tool discovery and signature extraction
 │   ├── models_manager.py       # Dynamic model discovery and settings
 │   ├── schema_manager.py       # JSON schema CRUD operations
 │   ├── provider_manager.py     # LLM provider management with strict typing
@@ -587,10 +729,10 @@ ATeam/
 │   ├── monitoring.py           # System monitoring
 │   ├── models.yaml             # Model configurations (complete OpenAI coverage)
 │   ├── agents.yaml             # Agent configurations
-│   ├── tools.yaml              # Tool definitions (custom only)
 │   ├── providers.yaml          # Provider definitions (no models)
 │   ├── prompts/                # Prompt templates
-│   └── schemas/                # JSON schema files
+│   ├── schemas/                # JSON schema files
+│   └── tools/                  # Python tool files (dynamically discovered)
 ├── frontend/
 │   ├── src/components/         # React components
 │   ├── src/api/index.ts        # API client
@@ -665,12 +807,20 @@ ATeam/
 - ✅ Specialized editing interfaces for system and seed prompts
 - ✅ JSON-based seed prompt storage with markdown fallback
 - ✅ Content persistence and synchronization across prompt switches
+- ✅ Dynamic tool discovery from Python files
+- ✅ Complete function and method signature extraction
+- ✅ Tool signature display across all interfaces
+- ✅ Expandable class methods with individual signatures
+- ✅ Docstring integration with warning indicators
+- ✅ Method expansion with chevron controls
+- ✅ Monospace font styling for signatures
 
 ### System Health
 - **0 Warnings**: All providers and models properly configured
-- **All APIs Working**: Models, providers, schemas, agents
+- **All APIs Working**: Models, providers, schemas, agents, tools
 - **Frontend Responsive**: All components working correctly
 - **Type Safety**: No type errors in development
 - **Complete Configuration**: All 29 OpenAI chat models configured with accurate specifications
+- **Dynamic Tools**: 2 tools discovered and displaying signatures correctly
 
 The LLM model management system is now complete with all requested features implemented and working! 🎉 

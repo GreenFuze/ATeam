@@ -6,14 +6,13 @@ agents:
   grammar_file: null
   id: god
   max_tokens: null
-  model: llama-3.1-8b
-  name: God
+  model: llama3.1:8b
+  name: Zeus
   prompts:
   - god_system.md
-  - create_agent.md
   schema_file: null
-  temperature: 0.7
+  temperature: 0.5
   tools:
   - CreateAgent
   - CreateTool
-  updated_at: '2025-07-30T10:06:11.361127'
+  updated_at: '2025-08-01T10:28:16.165071'

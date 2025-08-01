@@ -64,6 +64,8 @@ class ModelsManager:
     def discover_models_from_llm(self) -> Dict[str, Any]:
         """Discover models from llm package without loading them"""
         discovered_models = {}
+        chat_model_ids = set()
+        embedding_model_ids = set()
         
         try:
             # Discover chat models
@@ -71,6 +73,7 @@ class ModelsManager:
             for model in chat_models:
                 model_id = model.model_id
                 provider_name = self._get_provider_from_model(model)
+                chat_model_ids.add(model_id)
                 
                 discovered_models[model_id] = {
                     'id': model_id,
@@ -82,7 +85,9 @@ class ModelsManager:
                     'can_stream': getattr(model, 'can_stream', False),
                     'vision': getattr(model, 'vision', False),
                     'attachment_types': getattr(model, 'attachment_types', set()),
-                    'embedding_model': False
+                    'embedding_model': False,
+                    'is_chat_model': True,
+                    'is_embedding_model': False
                 }
             
             # Discover embedding models
@@ -90,24 +95,41 @@ class ModelsManager:
             for model in embedding_models:
                 model_id = model.model_id
                 provider_name = self._get_provider_from_model(model)
+                embedding_model_ids.add(model_id)
                 
-                discovered_models[model_id] = {
-                    'id': model_id,
-                    'name': getattr(model, 'model_name', None) or model_id,
-                    'provider': provider_name,
-                    'description': f'{model_id} embedding model from {provider_name}',
-                    'supports_schema': False,
-                    'supports_tools': False,
-                    'can_stream': False,
-                    'vision': False,
-                    'attachment_types': set(),
-                    'dimensions': getattr(model, 'dimensions', None),
-                    'truncate': getattr(model, 'truncate', False),
-                    'supports_binary': getattr(model, 'supports_binary', False),
-                    'supports_text': getattr(model, 'supports_text', False),
-                    'embed_batch': hasattr(model, 'embed_batch'),
-                    'embedding_model': True
-                }
+                if model_id in discovered_models:
+                    # Model exists as both chat and embedding - merge capabilities
+                    existing_model = discovered_models[model_id]
+                    existing_model.update({
+                        'description': f'{model_id} model from {provider_name} (chat + embedding)',
+                        'dimensions': getattr(model, 'dimensions', None),
+                        'truncate': getattr(model, 'truncate', False),
+                        'supports_binary': getattr(model, 'supports_binary', False),
+                        'supports_text': getattr(model, 'supports_text', False),
+                        'embed_batch': hasattr(model, 'embed_batch'),
+                        'is_embedding_model': True
+                    })
+                else:
+                    # New embedding-only model
+                    discovered_models[model_id] = {
+                        'id': model_id,
+                        'name': getattr(model, 'model_name', None) or model_id,
+                        'provider': provider_name,
+                        'description': f'{model_id} embedding model from {provider_name}',
+                        'supports_schema': False,
+                        'supports_tools': False,
+                        'can_stream': False,
+                        'vision': False,
+                        'attachment_types': set(),
+                        'dimensions': getattr(model, 'dimensions', None),
+                        'truncate': getattr(model, 'truncate', False),
+                        'supports_binary': getattr(model, 'supports_binary', False),
+                        'supports_text': getattr(model, 'supports_text', False),
+                        'embed_batch': hasattr(model, 'embed_batch'),
+                        'embedding_model': True,
+                        'is_chat_model': False,
+                        'is_embedding_model': True
+                    }
                 
         except Exception as e:
             print(f"Error discovering models from llm: {e}")
@@ -290,32 +312,90 @@ class ModelsManager:
         # Add discovered models that aren't configured
         for model_id, discovered_info in discovered_models.items():
             if model_id not in processed_names:
-                # Get available settings schema
-                available_settings = self.get_provider_model_schema(discovered_info['provider'], discovered_info.get('embedding_model', False))
+                # Check if this model supports both chat and embedding
+                is_dual_capability = discovered_info.get('is_chat_model', False) and discovered_info.get('is_embedding_model', False)
                 
-                model_view = ModelInfoView(
-                    id=discovered_info['id'],
-                    name=discovered_info['name'],
-                    provider=discovered_info['provider'],
-                    description=discovered_info['description'],
-                    context_window_size=None,
-                    model_settings={},
-                    default_inference={},
-                    configured=False,
-                    supports_schema=discovered_info.get('supports_schema', False),
-                    supports_tools=discovered_info.get('supports_tools', False),
-                    can_stream=discovered_info.get('can_stream', False),
-                    available_settings=available_settings,
-                    embedding_model=discovered_info.get('embedding_model', False),
-                    vision=discovered_info.get('vision', False),
-                    attachment_types=discovered_info.get('attachment_types', set()),
-                    dimensions=discovered_info.get('dimensions', None),
-                    truncate=discovered_info.get('truncate', False),
-                    supports_binary=discovered_info.get('supports_binary', False),
-                    supports_text=discovered_info.get('supports_text', False),
-                    embed_batch=discovered_info.get('embed_batch', False)
-                )
-                result.append(model_view)
+                if is_dual_capability:
+                    # Create two entries for the same model - one for chat, one for embedding
+                    
+                    # Chat model entry (same ID, embedding_model=False)
+                    chat_available_settings = self.get_provider_model_schema(discovered_info['provider'], False)
+                    chat_model_view = ModelInfoView(
+                        id=discovered_info['id'],  # Use original ID
+                        name=discovered_info['name'],  # Use original name
+                        provider=discovered_info['provider'],
+                        description=discovered_info['description'],
+                        context_window_size=None,
+                        model_settings={},
+                        default_inference={},
+                        configured=False,
+                        supports_schema=discovered_info.get('supports_schema', False),
+                        supports_tools=discovered_info.get('supports_tools', False),
+                        can_stream=discovered_info.get('can_stream', False),
+                        available_settings=chat_available_settings,
+                        embedding_model=False,  # This makes it appear in chat models section
+                        vision=discovered_info.get('vision', False),
+                        attachment_types=discovered_info.get('attachment_types', set()),
+                        dimensions=None,
+                        truncate=False,
+                        supports_binary=False,
+                        supports_text=False,
+                        embed_batch=False
+                    )
+                    result.append(chat_model_view)
+                    
+                    # Embedding model entry (same ID, embedding_model=True)
+                    embedding_available_settings = self.get_provider_model_schema(discovered_info['provider'], True)
+                    embedding_model_view = ModelInfoView(
+                        id=discovered_info['id'],  # Use original ID
+                        name=discovered_info['name'],  # Use original name
+                        provider=discovered_info['provider'],
+                        description=discovered_info['description'],
+                        context_window_size=None,
+                        model_settings={},
+                        default_inference={},
+                        configured=False,
+                        supports_schema=False,
+                        supports_tools=False,
+                        can_stream=False,
+                        available_settings=embedding_available_settings,
+                        embedding_model=True,  # This makes it appear in embedding models section
+                        vision=False,
+                        attachment_types=set(),
+                        dimensions=discovered_info.get('dimensions', None),
+                        truncate=discovered_info.get('truncate', False),
+                        supports_binary=discovered_info.get('supports_binary', False),
+                        supports_text=discovered_info.get('supports_text', False),
+                        embed_batch=discovered_info.get('embed_batch', False)
+                    )
+                    result.append(embedding_model_view)
+                else:
+                    # Single capability model
+                    available_settings = self.get_provider_model_schema(discovered_info['provider'], discovered_info.get('embedding_model', False))
+                    
+                    model_view = ModelInfoView(
+                        id=discovered_info['id'],
+                        name=discovered_info['name'],
+                        provider=discovered_info['provider'],
+                        description=discovered_info['description'],
+                        context_window_size=None,
+                        model_settings={},
+                        default_inference={},
+                        configured=False,
+                        supports_schema=discovered_info.get('supports_schema', False),
+                        supports_tools=discovered_info.get('supports_tools', False),
+                        can_stream=discovered_info.get('can_stream', False),
+                        available_settings=available_settings,
+                        embedding_model=discovered_info.get('embedding_model', False),
+                        vision=discovered_info.get('vision', False),
+                        attachment_types=discovered_info.get('attachment_types', set()),
+                        dimensions=discovered_info.get('dimensions', None),
+                        truncate=discovered_info.get('truncate', False),
+                        supports_binary=discovered_info.get('supports_binary', False),
+                        supports_text=discovered_info.get('supports_text', False),
+                        embed_batch=discovered_info.get('embed_batch', False)
+                    )
+                    result.append(model_view)
         
         return result
     
@@ -337,11 +417,33 @@ class ModelsManager:
         return model_id
     
     def update_model(self, model_id: str, model_config: Dict[str, Any]) -> None:
-        """Update an existing model configuration"""
+        """Update an existing model configuration or create a new one if it's discovered"""
         if model_id not in self.models:
-            raise ValueError(f"Model '{model_id}' not found")
+            # Check if this is a discovered model that needs to be created
+            discovered_models = self.discover_models_from_llm()
+            
+            # Check if it's a regular discovered model
+            if model_id in discovered_models:
+                discovered_info = discovered_models[model_id]
+                
+                # Create new model configuration
+                new_model_config = {
+                    'id': model_id,
+                    'name': model_config.get('name', discovered_info['name']),
+                    'provider': discovered_info['provider'],
+                    'description': model_config.get('description', discovered_info['description']),
+                    'context_window_size': model_config.get('context_window_size'),
+                    'model_settings': model_config.get('model_settings', {}),
+                    'default_inference': model_config.get('default_inference', {})
+                }
+                
+                # Create the model
+                self.create_model(new_model_config)
+            else:
+                raise ValueError(f"Model '{model_id}' not found and not discovered")
+
         
-        # Update only the provided fields
+        # Update the model (now it exists in self.models)
         current_model = self.models[model_id]
         for key, value in model_config.items():
             if hasattr(current_model, key):

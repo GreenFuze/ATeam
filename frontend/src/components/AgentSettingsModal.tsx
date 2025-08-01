@@ -1,10 +1,88 @@
 import React, { useState, useEffect } from 'react';
 import {
   Modal, Title, TextInput, Textarea, Select, NumberInput,
-  Switch, Button, Group, Stack, Divider, Badge
+  Switch, Button, Group, Stack, Divider, Badge, ActionIcon, Card
 } from '@mantine/core';
+import { IconGripVertical, IconX } from '@tabler/icons-react';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import {
+  useSortable,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { AgentConfig, CreateAgentRequest } from '../types';
 import { agentsApi } from '../api';
+
+interface SortablePromptItemProps {
+  prompt: any;
+  onRemove: (promptName: string) => void;
+}
+
+const SortablePromptItem: React.FC<SortablePromptItemProps> = ({ prompt, onRemove }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+  } = useSortable({ id: prompt.name });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <Card
+      ref={setNodeRef}
+      style={style}
+      p="xs"
+      withBorder
+      mb="xs"
+    >
+      <Group justify="space-between" align="center">
+        <Group gap="xs">
+          <ActionIcon
+            variant="subtle"
+            size="sm"
+            {...attributes}
+            {...listeners}
+            style={{ cursor: 'grab' }}
+          >
+            <IconGripVertical size={16} />
+          </ActionIcon>
+          <div>
+            <div style={{ fontWeight: 500 }}>{prompt.name}</div>
+            <div style={{ fontSize: '0.875rem', color: 'var(--mantine-color-dimmed)' }}>
+              {prompt.content?.substring(0, 100)}...
+            </div>
+          </div>
+        </Group>
+        <ActionIcon
+          variant="subtle"
+          color="red"
+          size="sm"
+          onClick={() => onRemove(prompt.name)}
+        >
+          <IconX size={16} />
+        </ActionIcon>
+      </Group>
+    </Card>
+  );
+};
 
 interface AgentSettingsModalProps {
   opened: boolean;
@@ -38,7 +116,17 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
     enable_scratchpad: true
   });
 
+  const [selectedPromptToAdd, setSelectedPromptToAdd] = useState<string>('');
+
   const isEditing = !!agent;
+
+  // Drag and drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   useEffect(() => {
     if (opened) {
@@ -133,13 +221,39 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
     }
   };
 
-  const handlePromptToggle = (promptName: string) => {
+
+
+  const handleAddPrompt = () => {
+    if (selectedPromptToAdd && !formData.prompts.includes(selectedPromptToAdd)) {
+      setFormData(prev => ({
+        ...prev,
+        prompts: [...prev.prompts, selectedPromptToAdd]
+      }));
+      setSelectedPromptToAdd('');
+    }
+  };
+
+  const handleRemovePrompt = (promptName: string) => {
     setFormData(prev => ({
       ...prev,
-      prompts: prev.prompts.includes(promptName)
-        ? prev.prompts.filter(p => p !== promptName)
-        : [...prev.prompts, promptName]
+      prompts: prev.prompts.filter(p => p !== promptName)
     }));
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (active.id !== over?.id) {
+      setFormData(prev => {
+        const oldIndex = prev.prompts.indexOf(active.id as string);
+        const newIndex = prev.prompts.indexOf(over?.id as string);
+
+        return {
+          ...prev,
+          prompts: arrayMove(prev.prompts, oldIndex, newIndex)
+        };
+      });
+    }
   };
 
   const handleToolToggle = (toolName: string) => {
@@ -245,24 +359,59 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
         {/* Prompts */}
         <div>
           <Title order={4} mb="sm">System Prompts</Title>
-          <div style={{ maxHeight: '200px', overflowY: 'auto' }}>
-            <Stack gap="xs">
-              {prompts.map((prompt) => (
-                <div key={prompt.name} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Switch
-                    size="sm"
-                    checked={formData.prompts.includes(prompt.name)}
-                    onChange={() => handlePromptToggle(prompt.name)}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 500 }}>{prompt.name}</div>
-                    <div style={{ fontSize: '0.875rem', color: 'var(--mantine-color-dimmed)' }}>
-                      {prompt.content?.substring(0, 100)}...
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </Stack>
+          
+          {/* Add Prompt Section */}
+          <Group mb="md">
+            <Select
+              placeholder="Select a system prompt to add"
+              data={prompts
+                .filter(prompt => !formData.prompts.includes(prompt.name))
+                .map(prompt => ({ value: prompt.name, label: prompt.name }))
+              }
+              value={selectedPromptToAdd}
+              onChange={(value) => setSelectedPromptToAdd(value || '')}
+              style={{ flex: 1 }}
+            />
+            <Button
+              onClick={handleAddPrompt}
+              disabled={!selectedPromptToAdd}
+              size="sm"
+            >
+              Add
+            </Button>
+          </Group>
+
+          {/* Draggable Prompts List */}
+          <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
+            {formData.prompts.length > 0 ? (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext
+                  items={formData.prompts}
+                  strategy={verticalListSortingStrategy}
+                >
+                  {formData.prompts.map((promptName) => {
+                    const prompt = prompts.find(p => p.name === promptName);
+                    if (!prompt) return null;
+                    
+                    return (
+                      <SortablePromptItem
+                        key={promptName}
+                        prompt={prompt}
+                        onRemove={handleRemovePrompt}
+                      />
+                    );
+                  })}
+                </SortableContext>
+              </DndContext>
+            ) : (
+              <Card p="md" withBorder style={{ textAlign: 'center', color: 'var(--mantine-color-dimmed)' }}>
+                No system prompts selected. Use the dropdown above to add prompts.
+              </Card>
+            )}
           </div>
         </div>
 
