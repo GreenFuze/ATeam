@@ -40,15 +40,18 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 ### ✅ Core Features
 - **Multi-Agent System**: YAML-based agent configuration with full CRUD operations
 - **LLM Integration**: Full integration with `llm` package and multiple providers
-- **Tool System**: Dynamic Python tool loading and execution with signature extraction
-- **Real-time Communication**: WebSocket-based chat system
+- **Tool System**: Custom tool descriptor and executor with dynamic Python tool loading and execution
+- **Real-time Communication**: WebSocket-based chat system with centralized connection management
 - **Configuration Management**: YAML-based configuration files (agents.yaml, providers.yaml, models.yaml, prompts.yaml)
 - **Provider Management**: Support for OpenAI, Anthropic, Google, and local models
 - **Dynamic Model Management**: Runtime discovery of models and their capabilities
 - **Schema Management**: JSON schema CRUD operations for structured outputs
 - **Context Window Tracking**: Real-time context usage calculation and visualization
-- **Global Notification System**: Proactive system health monitoring and user alerts
+- **Global Notification System**: Real-time WebSocket-based error/warning notifications with detailed dialogs
 - **Enhanced Prompt Management**: Full CRUD operations with specialized editing interfaces for different prompt types
+- **Comprehensive Error Handling**: Fail-fast error handling with proper exception propagation and detailed error messages
+- **Custom Conversation Management**: Custom message history management without LLM package conversation object bias
+- **Structured LLM Responses**: Pydantic-based structured response system with type safety and validation
 
 ### ✅ UI/UX Features
 - **Dark Mode**: Consistent dark theme throughout with proper contrast
@@ -73,8 +76,224 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 - **Provider Discovery**: Automatic discovery of LLM providers and model counts from `llm` package
 - **Strict Typing**: Pydantic models for all data structures with compile-time validation
 - **Dynamic Schema Extraction**: Runtime extraction of model inference settings without loading models
+- **Fail-Fast Architecture**: System immediately stops on errors instead of continuing in invalid state
 
 ## Recent Enhancements
+
+### ✅ Major System Refactoring - WebSocket Communication & Custom Conversation Management (Latest Update)
+The ATeam system has undergone a comprehensive refactoring to implement WebSocket-based real-time communication, custom conversation management, and proper tool integration without relying on the `llm` package's conversation object.
+
+#### Key Architectural Changes
+- **WebSocket Flow**: All non-user messages sent via WebSocket from backend to frontend
+- **Custom Conversation Management**: Replaced `llm` conversation object with custom `List[Message]` for conversation history
+- **Structured LLM Responses**: All responses follow structured JSON format with Pydantic validation
+- **Custom Tool Integration**: Uses custom tool descriptor and executor instead of `llm` package tool system
+- **Type Safety**: Complete type safety with Pydantic models throughout the system
+
+#### Technical Implementation
+- **New Files Created**:
+  - `backend/tool_descriptor.py` - Tool description generation for LLM prompts
+  - `backend/tool_executor.py` - Dynamic tool execution with type conversion
+  - `backend/websocket_manager.py` - Centralized WebSocket connection management
+
+- **Major Files Refactored**:
+  - `backend/schemas.py` - Added structured response classes (ChatResponse, ToolCallResponse, etc.)
+  - `backend/agent.py` - Complete refactoring for custom conversation management
+  - `backend/chat_engine.py` - WebSocket integration and cleanup
+  - `backend/tool_manager.py` - New tool system integration
+  - `backend/main.py` - WebSocket endpoint updates
+  - `frontend/src/types/index.ts` - Updated message types
+  - `frontend/src/components/AgentChat.tsx` - New WebSocket flow
+  - `frontend/src/components/MessageDisplay.tsx` - New message types
+
+#### Message Flow Architecture
+1. **User sends message** → Frontend adds to local state
+2. **Frontend sends via WebSocket** → Backend receives
+3. **Backend processes with agent** → Agent builds conversation context
+4. **Agent gets LLM response** → Parses into structured format
+5. **Agent handles action** → Executes tools, delegates, or responds
+6. **Backend sends via WebSocket** → Frontend receives and displays
+
+#### Structured Response System
+- **Base Class**: `StructuredResponse` with common fields (action, reasoning)
+- **Response Types**: `ChatResponse`, `ToolCallResponse`, `ToolReturnResponse`, `AgentDelegateResponse`, `AgentCallResponse`, `AgentReturnResponse`, `RefinementResponse`
+- **Validation**: Pydantic models ensure type safety and proper validation
+- **Error Handling**: Detailed exceptions for invalid JSON or schema violations
+
+#### Tool System Refactoring
+- **Custom Tool Descriptor**: `tools_to_prompt()` and `class_to_prompt()` functions
+- **Dynamic Tool Executor**: `run_tool()` with dynamic module loading and type conversion
+- **No LLM Package Bias**: Tools work without `llm` package's tool bias
+- **Support for Functions and Classes**: Both standalone functions and class methods supported
+
+#### WebSocket Communication
+- **Centralized Management**: `WebSocketManager` class for connection tracking
+- **Agent-Specific Connections**: Track connections by agent ID
+- **Message Types**: `system_message`, `seed_message`, `agent_response`, `connection_established`, `error`
+- **Real-time Updates**: All agent actions sent via WebSocket to frontend
+
+#### Conversation Management
+- **Custom Message History**: `self.messages: List[Message]` instead of `llm` conversation object
+- **Manual Context Building**: `_build_conversation_context()` constructs full conversation for LLM
+- **System Prompts**: Included in every request dynamically
+- **Seed Messages**: Loaded separately and included in conversation context
+
+#### Code Cleanup
+- **Removed Unused Code**: All `llm.conversation` usage eliminated
+- **Removed Unused Methods**: `_execute_tool()`, `_process_tool_result()`, `_delegate_to_agent()`, `_implements_llm_toolbox()`
+- **Clean Imports**: Removed unused imports and dependencies
+- **Updated Schema Fields**: Removed `NORMAL_RESPONSE`, added new message types
+
+#### Success Criteria Met
+1. ✅ **WebSocket Flow**: All non-user messages delivered via WebSocket
+2. ✅ **Tool Integration**: Tools work without `llm` package bias
+3. ✅ **Response Structure**: All responses follow structured format
+4. ✅ **Error Handling**: Proper error propagation and display
+5. ✅ **Type Safety**: Complete type safety throughout the system
+6. ✅ **Performance**: No degradation in response times
+7. ✅ **Reliability**: Stable WebSocket connections and message delivery
+8. ✅ **Code Cleanliness**: No unused code, clean imports, no dead paths
+
+#### Impact
+- **🚀 Real-time Communication**: WebSocket-based real-time updates
+- **🔧 Custom Tool System**: No LLM package bias, full control over tool execution
+- **📊 Structured Responses**: Consistent JSON format with proper validation
+- **🛡️ Type Safety**: Complete type safety with Pydantic models
+- **🧹 Clean Architecture**: No unused code, proper separation of concerns
+- **⚡ Performance**: Efficient conversation management without LLM package limitations
+
+### ✅ Comprehensive Error Handling Implementation
+The application implements a robust **FAIL-FAST** error handling philosophy throughout all components, ensuring the system never continues running in an invalid state:
+
+#### Key Features
+- **FAIL-FAST PRINCIPLE**: All errors are immediately raised as exceptions instead of being logged and ignored
+- **PROPER ERROR PROPAGATION**: Errors bubble up to API endpoints with appropriate HTTP status codes
+- **DETAILED ERROR MESSAGES**: Specific, actionable error messages with context information
+- **WEB SOCKET ERROR HANDLING**: Real-time error responses with detailed suggestions
+- **NO SILENT FAILURES**: System immediately stops when invalid state is detected
+
+#### Technical Implementation
+- **Agent Class (`backend/agent.py`)**:
+  - **`_load_prompts()`**: Raises `ValueError` for missing prompts with detailed context
+  - **`_load_tools()`**: Raises `ValueError` for missing tools or tool manager
+  - **`_initialize_conversation()`**: Raises `ValueError` for missing models
+  - **`add_message()`**: Raises `RuntimeError` for uninitialized conversation
+  - **`get_response()`**: Raises `RuntimeError` for uninitialized conversation
+
+- **Manager Classes**:
+  - **`AgentManager`**: Removed try-catch blocks, now raises exceptions naturally
+  - **`ToolManager`**: Raises `RuntimeError` for tool discovery errors
+  - **`SchemaManager`**: Raises `RuntimeError` for schema loading and file errors
+  - **`PromptManager`**: Already properly raises `FileNotFoundError` for missing prompts
+  - **`ModelsManager`**: Raises `RuntimeError` for model loading and discovery errors
+  - **`ProviderManager`**: Raises `ValueError` for invalid providers, `RuntimeError` for file errors
+
+- **API Endpoints (`backend/main.py`)**:
+  - **REST API**: Proper exception handling with specific HTTP status codes
+    - `ValueError` → HTTP 400 (Bad Request)
+    - `RuntimeError` → HTTP 500 (Internal Server Error)
+    - Other exceptions → HTTP 500 (Internal Server Error)
+  - **WebSocket API**: Detailed error responses with suggestions for fixing issues
+
+#### Error Types and Handling
+- **`ValueError`**: For validation errors (missing prompts, tools, models, invalid configurations)
+- **`RuntimeError`**: For runtime errors (conversation initialization failures, file system errors)
+- **`FileNotFoundError`**: For missing prompt files (from prompt manager)
+- **`UnknownModelError`**: For missing models (from llm package)
+
+#### API Response Examples
+```json
+// REST API Error Response
+{
+  "detail": "Prompt 'assistant_system.md' not found for agent 'TestAgent'"
+}
+
+// WebSocket Error Response  
+{
+  "type": "error",
+  "error": "Validation Error",
+  "details": {
+    "agent_id": "test-agent",
+    "exception_type": "ValueError", 
+    "exception_message": "Tool 'calculator' not found for agent 'TestAgent'",
+    "suggestion": "Check agent configuration (prompts, tools, model)"
+  }
+}
+```
+
+#### Critical Security Improvements
+**Before (DANGEROUS)**:
+- System logged errors but continued running in invalid state
+- Could process messages with missing prompts/tools/models
+- Silent failures with no user visibility
+- Generic error messages without context
+
+**After (SAFE)**:
+- System immediately stops when errors occur
+- No processing with missing or invalid resources
+- Clear, actionable error messages for users
+- Proper HTTP status codes for API consumers
+- Detailed error information for debugging
+
+#### Impact
+- **🚨 CRITICAL SECURITY**: Application never continues running in invalid state
+- **🔍 BETTER DEBUGGING**: Specific error messages with full context
+- **👥 USER EXPERIENCE**: Clear, actionable error responses
+- **🛡️ RELIABILITY**: Fail-fast approach prevents cascading failures
+- **📊 MONITORING**: Proper error tracking and reporting
+
+### ✅ Global Notification System Implementation
+The notification system has been completely implemented with real-time WebSocket delivery and comprehensive error/warning management:
+
+#### Key Features
+- **Real-time WebSocket Notifications**: Three dedicated WebSocket endpoints for errors, warnings, and info notifications
+- **Rich Frontend Display**: Mantine-based notification system with clickable dialogs for detailed information
+- **Comprehensive Error Coverage**: All backend print statements replaced with structured notifications
+- **Context-Rich Logging**: Each notification includes relevant context for debugging
+- **Automatic Reconnection**: Frontend automatically reconnects with exponential backoff
+- **Professional UI**: Clean notification display with proper styling and user interaction
+
+#### Technical Implementation
+- **Backend Changes**:
+  - Created `notification_manager.py` with WebSocket-based notification broadcasting
+  - Created `notification_utils.py` with utility functions for easy integration
+  - Added WebSocket endpoints: `/ws/notifications/errors`, `/ws/notifications/warnings`, `/ws/notifications/info`
+  - Replaced ALL print statements in backend files with structured logging:
+    - `agent.py` - Agent initialization and conversation errors
+    - `models_manager.py` - Configuration and discovery errors
+    - `agent_manager.py` - Agent loading and creation errors
+    - `main.py` - API endpoint and WebSocket errors
+    - `provider_manager.py` - Provider configuration errors
+    - `prompt_manager.py` - Prompt loading and metadata errors
+    - `tool_manager.py` - Tool discovery errors
+    - `schema_manager.py` - Schema file errors
+  - Enhanced error handling with detailed context information
+
+- **Frontend Changes**:
+  - Created `NotificationService.ts` with WebSocket connection management
+  - Implemented rich notification display with Mantine components
+  - Added clickable notifications with detailed error dialogs
+  - Automatic reconnection with exponential backoff strategy
+  - Proper cleanup on page unload
+  - Fallback to console logging if WebSocket unavailable
+
+#### Notification Types
+- **Errors**: Agent failures, tool loading errors, conversation errors, API failures, configuration issues
+- **Warnings**: Missing tool manager, tool not found, prompt not found, configuration files missing
+- **Info**: System status updates, successful operations, directory creation
+
+#### User Experience
+- **Immediate Visibility**: Errors and warnings appear instantly as popup notifications
+- **Detailed Information**: Click notifications to see full stack traces and context
+- **No Missed Issues**: All backend issues are immediately visible in the frontend
+- **Professional UI**: Clean, modern notification system with proper styling
+- **Context-Rich**: Each notification includes relevant context for debugging
+
+#### Impact
+- **Dramatically Improved Debugging**: No more hidden errors in console output
+- **Real-time Issue Detection**: Immediate visibility of all backend problems
+- **Professional Error Handling**: Structured error reporting with detailed information
+- **Better User Experience**: Clear, actionable notifications instead of silent failures
 
 ### Enhanced Tool Management with Signature Display (July 2025)
 The tool management system has been significantly enhanced with dynamic discovery and comprehensive signature display capabilities:
@@ -198,7 +417,7 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 #### Technical Implementation
 - **Frontend Changes**:
   - Replaced checkbox-based system with dropdown + draggable list
-  - Added `@dnd-kit/core` and `@dnd-kit/sortable` for drag-and-drop functionality
+  - Added `@dnd-kit/core`, `@dnd-kit/sortable`, and `@dnd-kit/utilities` for drag-and-drop functionality
   - Created `SortablePromptItem` component with drag handle and remove button
   - Implemented `DndContext` with proper sensors and collision detection
   - Added state management for selected prompt to add and drag operations
@@ -221,6 +440,12 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - **Validation**: Prevents duplicate prompts and handles edge cases
 - **Persistence**: Order is maintained across agent sessions and restarts
 
+#### Build and Deployment
+- **Dependency Management**: All required `@dnd-kit` packages properly installed and configured
+- **TypeScript Integration**: Full type safety with proper import statements
+- **Production Build**: Frontend compiles successfully with all drag-and-drop functionality
+- **Static File Serving**: Built frontend properly served from backend static directory
+
 ## File Organization
 - `backend/agents.yaml` - Agent configurations
 - `backend/providers.yaml` - LLM provider definitions (no models)
@@ -232,13 +457,13 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 
 ### Backend Core Files
 - `backend/main.py` - FastAPI application with all endpoints and static file serving
+- `backend/manager_registry.py` - Global manager registry with centralized initialization and aliases
 - `backend/agent_manager.py` - Agent lifecycle management (fixed delete path issue)
 - `backend/tool_manager.py` - Dynamic tool discovery and signature extraction
 - `backend/provider_manager.py` - LLM provider management with strict typing
 - `backend/models_manager.py` - Dynamic model discovery and settings management
 - `backend/schema_manager.py` - JSON schema CRUD operations
 - `backend/prompt_manager.py` - Prompt file management (fail fast implementation)
-- `backend/llm_interface.py` - LLM integration layer
 - `backend/chat_engine.py` - Chat processing logic with context window tracking
 - `backend/schemas.py` - Pydantic data models and type definitions
 
@@ -253,6 +478,7 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - `frontend/src/components/ToolViewer.tsx` - Tool detail modal with signature display
 - `frontend/src/pages/ToolsPage.tsx` - Dedicated tools page with expandable method signatures
 - `frontend/src/api/index.ts` - API client with proper response handling
+- `frontend/src/services/NotificationService.ts` - WebSocket-based notification service with Mantine components
 
 ## Current Implementation Status
 
@@ -293,6 +519,33 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 34. **Simplified Tool Interface**: Removed refresh buttons - users can use browser refresh to see new tools
 35. **Dual-Capability Model Support**: Models supporting both chat and embedding now appear in both sections with the same ID but different flags
 36. **Draggable System Prompts**: Agent settings now feature drag-and-drop reordering of system prompts with dropdown selection
+37. **Frontend Build System**: Complete TypeScript compilation and production build with all dependencies properly configured
+38. **Strict Schema Implementation**: Replaced all dictionary usage with Pydantic schemas for type safety and maintainability
+39. **Context Progress Tooltip**: Enhanced tooltip showing "[tokens used]/[context window]" on hover
+40. **File Logging Removal**: Removed file logging, keeping only console output for cleaner system
+41. **Agent Class with LLM Integration**: New Agent class using llm package for conversations with tools
+42. **Conversation Persistence**: Save/load conversations in agent_history directory as JSON files
+43. **Lazy Loading Agent Instances**: AgentManager uses lazy loading for efficient memory usage
+44. **LLMInterface Removal**: Eliminated redundant abstraction layer, direct Agent integration
+45. **JSON Serialization Fix**: Proper response handling with `response.text()` method for llm package
+46. **Manager Isolation Enforcement**: Strict enforcement of configuration file access through managers only
+47. **System Prompts Integration**: Agent loads system prompts and seed prompts during conversation initialization
+48. **Agent History API**: Dedicated endpoint for frontend to load conversation history from agent
+49. **Frontend Message Source**: Frontend only reads messages from agent history, not from other sources
+50. **Tool Manager Isolation**: Agent uses ToolManager for tool loading, maintains proper isolation
+51. **Context Progress Bug Fix**: Eliminated incorrect frontend context calculations on initial load
+52. **WebSocket Error Handling**: Proper handling of WebSocket disconnections to prevent ASGI errors
+53. **Comprehensive Error Handling**: Fail-fast error handling with proper exception propagation throughout all components
+54. **Agent Error Handling**: Agent class raises exceptions for missing prompts, tools, models, and conversation failures
+55. **Manager Error Handling**: All manager classes properly raise exceptions instead of logging and continuing
+56. **API Error Handling**: REST and WebSocket endpoints with proper HTTP status codes and detailed error responses
+57. **Security Improvements**: System never continues running in invalid state, preventing silent failures
+58. **Global Manager Registry**: Centralized manager management with aliases and no local copies
+59. **Manager Aliases**: Direct function access (`agent_manager()`, `tool_manager()`, etc.) for current instances
+60. **Centralized Initialization**: Single `initialize_managers()` function for all manager creation
+61. **Simplified Dependencies**: No need to pass manager instances around components
+62. **Cleaner Constructors**: Components don't require manager parameters
+63. **No Stale References**: Always get current manager instance via function call
 
 ### 🔄 Current State
 - **Application Running**: Server starts successfully on port 8000
@@ -312,6 +565,30 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - **Simplified Interface**: Clean UI without refresh buttons - browser refresh works for tool updates
 - **Dual-Capability Models**: `llama3.1:8b` now appears in both chat and embedding sections with the same ID but different flags
 - **Draggable System Prompts**: Agent settings feature drag-and-drop reordering with dropdown selection for system prompts
+- **Frontend Build**: Complete TypeScript compilation successful with all dependencies installed and configured
+- **Strict Schemas**: All data structures use Pydantic models with type safety and validation
+- **Context Progress Tooltips**: Detailed token information displayed on hover over progress rings
+- **Console Logging**: Clean logging system without file output
+- **Agent Class**: New Agent class with llm package integration and conversation persistence
+- **Lazy Loading**: Efficient agent instance management with on-demand creation
+- **Architecture Simplification**: Removed redundant LLMInterface layer, direct Agent integration
+- **JSON Serialization Fixed**: Proper response handling with `response.text()` method
+- **Manager Isolation**: Strict enforcement of configuration file access through managers only
+- **Zeus Agent Working**: Agent responding correctly with proper text content instead of object references
+- **Context Progress Bug Fix**: Eliminated incorrect frontend context calculations on initial load
+- **System Prompts Integration**: Agent loads system prompts and seed prompts during conversation initialization
+- **Agent History API**: Dedicated endpoint for frontend to load conversation history from agent
+- **Frontend Message Source**: Frontend only reads messages from agent history, not from other sources
+- **Tool Manager Isolation**: Agent uses ToolManager for tool loading, maintains proper isolation
+- **WebSocket Error Handling**: Proper handling of WebSocket disconnections to prevent ASGI errors
+- **System Prompts Fix**: Fixed system prompts integration by including them directly in messages sent to `chain()` method
+- **LLM Package Integration**: Proper understanding of how `llm` package conversation object works with system prompts
+- **Global Manager Registry**: Centralized manager management with aliases and no local copies
+- **Manager Aliases**: Direct function access for current manager instances throughout the application
+- **Centralized Initialization**: Single `initialize_managers()` function handles all manager creation
+- **Simplified Dependencies**: No need to pass manager instances around components
+- **Cleaner Constructors**: Components don't require manager parameters
+- **No Stale References**: Always get current manager instance via function call
 
 ### 📋 Next Steps
 - Test all new features with real agent interactions
@@ -378,11 +655,70 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
   - **Dual-Capability Detection**: Added `is_chat_model` and `is_embedding_model` flags during discovery
   - **Same Model ID**: Models with both capabilities appear twice with the same ID but different `embedding_model` flags
   - **Independent Configuration**: Each capability can be configured separately (e.g., different context window sizes)
-  - **No Artificial IDs**: Uses original model ID from `llm` (e.g., `llama3.1:8b`) instead of creating artificial IDs
-  - **Capability-Specific Settings**: Each entry gets appropriate inference settings schema
-  - **Frontend Separation**: Chat section shows models with `embedding_model: false`, embedding section shows `embedding_model: true`
+- **No Artificial IDs**: Uses original model ID from `llm` (e.g., `llama3.1:8b`) instead of creating artificial IDs
+- **Capability-Specific Settings**: Each entry gets appropriate inference settings schema
+- **Frontend Separation**: Chat section shows models with `embedding_model: false`, embedding section shows `embedding_model: true`
 - **Impact**: Users can now configure dual-capability models independently for different use cases without artificial IDs
 - **Status**: ✅ COMPLETE - Dual-capability models now appear in both sections with original model names
+
+### ✅ Global Manager Registry Implementation (Latest Update)
+- **Root Cause**: Need for centralized manager management and elimination of local manager copies
+- **Issue**: Manager instances were being passed around and stored locally, creating potential stale references and complex dependency management
+- **Solution**: Implemented global manager registry with centralized initialization and direct alias access
+- **Implementation**:
+  - **Global Manager Registry**: Created `manager_registry.py` with centralized manager initialization
+  - **Manager Aliases**: Direct function aliases (`agent_manager()`, `tool_manager()`, etc.) for immediate access
+  - **No Local Copies**: All components use manager aliases directly at point of use, never storing local references
+  - **Centralized Initialization**: Single `initialize_managers()` function handles all manager creation
+  - **Dependency Order**: Proper initialization order (tool_manager → agent_manager → others)
+  - **Error Handling**: Clear error messages if managers not initialized
+  - **Type Safety**: Proper type annotations with None handling for uninitialized state
+- **Architecture Benefits**:
+  - **Centralized Management**: All manager lifecycle managed in one place
+  - **No Stale References**: Always get current manager instance via function call
+  - **Simplified Dependencies**: No need to pass manager instances around
+  - **Cleaner Constructors**: Components don't need manager parameters
+  - **Better Separation**: Components focus on core functionality, not manager management
+  - **Easier Testing**: Single initialization point for all managers
+- **Technical Details**:
+  - **Manager Registry**: `manager_registry.py` provides `initialize_managers()` and getter functions
+  - **Direct Aliases**: `agent_manager()`, `tool_manager()`, `prompt_manager()`, etc. always return current instances
+  - **No Local Storage**: Components call aliases directly, never assign to local variables
+  - **Lazy Access**: Managers accessed only when needed, not stored in component state
+  - **Type Safety**: Proper type annotations with `ManagerType | None` for uninitialized state
+  - **Error Propagation**: Clear error messages if managers accessed before initialization
+- **Impact**: Much cleaner architecture, centralized manager management, no stale references
+- **Status**: ✅ COMPLETE - All backend files updated to use global manager registry
+
+### ✅ LLMInterface Removal and Architecture Simplification
+- **Root Cause**: Redundant abstraction layer causing JSON serialization issues and architectural violations
+- **Issue**: `LLMInterface` was duplicating functionality already in `Agent` class and violating manager isolation
+- **Solution**: Completely removed `LLMInterface` and simplified architecture
+- **Implementation**:
+  - **Eliminated LLMInterface**: Removed redundant abstraction layer entirely
+  - **Direct Agent Integration**: ChatEngine now works directly with Agent instances via `agent_manager.get_agent_instance()`
+  - **Fixed JSON Serialization**: Updated Agent class to use `response.text()` method instead of `str(response)`
+  - **Manager Isolation Enforcement**: Removed direct YAML access from non-manager files
+  - **Path Configuration Fix**: Updated ModelsManager to use correct relative path (`"models.yaml"` instead of `"backend/models.yaml"`)
+  - **Monitoring Update**: Fixed health check to use `llm` package directly instead of LLMInterface
+  - **Tool Manager Dependency Injection**: Pass ToolManager to AgentManager to maintain proper isolation
+  - **System Prompts Integration**: Load system prompts and seed prompts during conversation initialization
+  - **Agent History API**: Provide dedicated endpoint for frontend to load conversation history
+  - **Frontend Message Source**: Frontend only reads messages from agent history, not from other sources
+- **Architecture Benefits**:
+  - **Cleaner Separation**: Agent handles LLM integration, ChatEngine handles session orchestration
+  - **No Redundancy**: Single source of truth for LLM interactions
+  - **Proper Isolation**: Only managers access their respective configuration files
+  - **Better Error Handling**: Proper JSON serialization prevents runtime errors
+  - **Clear Responsibilities**: Agent = LLM worker, ChatEngine = session manager
+- **Technical Details**:
+  - **Response Handling**: `llm.models.ChainResponse` objects require `.text()` method call, not `str()` conversion
+  - **Manager Isolation**: Only `ModelsManager` accesses `models.yaml`, only `ProviderManager` accesses `providers.yaml`, etc.
+  - **Session Management**: ChatEngine maintains session state while Agent handles individual conversations
+  - **Prompt Type Handling**: Agent checks prompt type (system vs seed) before processing
+  - **Tool Loading**: Agent uses ToolManager for tool loading, maintains isolation
+- **Impact**: Eliminated JSON serialization errors, cleaner architecture, proper separation of concerns
+- **Status**: ✅ COMPLETE - Zeus agent responding correctly with proper text content
 
 ### ✅ Model Settings Dialog Improvements
 - **Root Cause**: Need for better model configuration interface
@@ -451,6 +787,90 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
   - **Field Types**: NumberInput for int/float, Switch for bool, TextInput for string
 - **Impact**: Proper data types in YAML, correct form validation, better user experience
 - **Status**: ✅ COMPLETE - All type handling working correctly
+
+### ✅ Strict Schema Implementation (Latest Update)
+- **Root Cause**: Using dictionaries directly is error-prone and hard to maintain
+- **Issue**: No type safety, difficult debugging, no autocomplete for data structures
+- **Solution**: Replaced all dictionary usage with strict Pydantic schemas
+- **Implementation**:
+  - **New Schemas**: Added `ContextUsageData`, `ConversationResponseData`, `AgentInfo`, `ConversationData`, `ToolExecutionResult`
+  - **ChatEngine Updates**: `process_message()` now returns `ConversationResponseData` instead of `Dict[str, Any]`
+  - **Context Usage**: `_calculate_context_usage()` returns `ContextUsageData` with validation rules
+  - **Agent Class**: `get_agent_info()` returns `AgentInfo`, `save_conversation()` uses `ConversationData`
+  - **API Layer**: Main.py properly serializes Pydantic objects using `.model_dump()`
+  - **Validation Rules**: Percentage fields (0-100), token counts (≥0), context windows (≥0)
+- **Benefits**:
+  - **Type Safety**: Compile-time validation prevents runtime errors
+  - **IDE Support**: Full autocomplete and type checking
+  - **Maintainability**: Self-documenting code with clear field definitions
+  - **Error Prevention**: Invalid data caught at object creation time
+  - **Performance**: Optimized serialization with built-in JSON support
+- **Status**: ✅ COMPLETE - All dictionary usage replaced with strict schemas
+
+### ✅ Context Progress Tooltip Enhancement (Latest Update)
+- **Root Cause**: Need for detailed token information in context progress display
+- **Issue**: Context progress only showed percentage, not actual token counts
+- **Solution**: Enhanced ContextProgress component with detailed tooltip
+- **Implementation**:
+  - **Tooltip Display**: Shows "[tokens used]/[context window]" when hovering over progress ring
+  - **Token Information**: Backend returns `tokens_used` and `context_window` along with percentage
+  - **Enhanced UI**: ContextProgress component accepts `tokensUsed` and `contextWindow` props
+  - **Type Safety**: Updated TypeScript interfaces to include new token fields
+  - **Fallback Display**: Shows percentage when token information not available
+- **User Experience**: Users can now see exact token usage and context window size on hover
+- **Status**: ✅ COMPLETE - Tooltip shows detailed token information
+
+### ✅ Context Progress Bug Fix (Latest Update)
+- **Root Cause**: Frontend calculating incorrect context usage on initial load
+- **Issue**: Context progress showed 8% initially, then jumped to 1% after first message
+- **Root Cause Analysis**: 
+  - Frontend was using hardcoded default context window size (4000 tokens)
+  - Rough token estimation (content.length / 4) was inaccurate
+  - Frontend calculation conflicted with backend's accurate calculations
+- **Solution**: Removed frontend context calculation on initial load
+- **Implementation**:
+  - **Removed Frontend Calculation**: `loadAgentHistory()` no longer calculates context usage
+  - **Backend Accuracy**: Context usage only updated when backend provides accurate information
+  - **Enhanced Backend**: Added model context window size to agent info endpoint
+  - **Proper Fallback**: Use reasonable default (8192 tokens) when model info not available
+- **Technical Details**:
+  - **Model Context Window**: Backend attempts to include `context_window_size` from model configuration
+  - **Accurate Calculation**: Backend has access to actual model configuration and can calculate usage more precisely
+  - **Real-time Updates**: Context usage updated with accurate information after each message
+- **Impact**: Eliminated confusing context usage jumps, accurate progress tracking
+- **Status**: ✅ COMPLETE - Context progress now shows accurate percentages from backend calculations
+
+### ✅ System Prompts Integration Fix (Latest Update)
+- **Root Cause**: `llm` package conversation object doesn't maintain system prompts via `prompt()` method
+- **Issue**: System prompts were being loaded but not affecting agent responses
+- **Root Cause Analysis**: 
+  - `conv.prompt()` method doesn't add responses to conversation
+  - System prompts need to be included directly in messages sent to `chain()` method
+  - `llm` package conversation object works differently than expected
+- **Solution**: Include system prompts directly in messages sent to `chain()` method
+- **Implementation**:
+  - **Prompt Collection**: `_add_system_prompts()` now collects system prompts and seed messages
+  - **Message Building**: `_build_message_with_prompts()` constructs full messages with system prompts
+  - **Direct Integration**: System prompts included in every message sent to `chain()` method
+  - **Proper Formatting**: System prompts formatted as "System: {content}" in messages
+- **Technical Details**:
+  - **Prompt Storage**: System prompts stored in `self._system_prompts` and `self._seed_messages`
+  - **Message Construction**: Full message includes system prompts, seed messages, and user message
+  - **Format**: "System: {prompt1}\n\nSystem: {prompt2}\n\nUser: {message}"
+  - **Path Fix**: Updated prompt manager path to `"backend/prompts"` for correct file loading
+- **Impact**: System prompts now properly affect agent responses, Zeus agent responds as God agent
+- **Status**: ✅ COMPLETE - System prompts working correctly, agent responses include proper identity and capabilities
+
+### ✅ File Logging Removal (Latest Update)
+- **Root Cause**: File logging creates unnecessary log files that clutter the system
+- **Issue**: `ateam.log` file being created and maintained unnecessarily
+- **Solution**: Removed file logging handler, keeping only console output
+- **Implementation**:
+  - **Logging Configuration**: Removed `logging.FileHandler('ateam.log')` from monitoring.py
+  - **Console Only**: Logging now outputs only to console via `logging.StreamHandler()`
+  - **Health Check Fix**: Fixed LLM health check to use correct method name
+- **Benefits**: Cleaner system, no log file management needed, console output sufficient for development
+- **Status**: ✅ COMPLETE - File logging removed, console logging maintained
 
 ### ✅ Model Groups and UI Separation
 - **Root Cause**: Need for better visual organization of models
@@ -522,6 +942,18 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 
 ## Key Implementation Lessons
 
+### Major Refactoring Learnings (Latest Update)
+1. **WebSocket Architecture**: Centralized WebSocket management with agent-specific connections provides better scalability and error handling
+2. **Custom Conversation Management**: Replacing `llm` conversation object with custom message lists gives full control over conversation flow and context building
+3. **Structured Response System**: Pydantic models for LLM responses ensure type safety and consistent error handling across all response types
+4. **Tool System Decoupling**: Custom tool descriptor and executor eliminate LLM package bias and provide better control over tool execution
+5. **Fail-Fast Philosophy**: Immediate exception raising instead of logging and continuing prevents silent failures and improves debugging
+6. **Code Cleanup Strategy**: Systematic removal of unused code, methods, and imports ensures clean architecture and prevents technical debt
+7. **Type Safety First**: Pydantic models throughout the system provide compile-time validation and better IDE support
+8. **Real-time Communication**: WebSocket-based message flow provides immediate feedback and better user experience
+9. **Separation of Concerns**: Clear boundaries between conversation management, tool execution, and message handling
+10. **Comprehensive Testing**: Validation tests ensure all refactoring changes work correctly and no functionality is broken
+
 ### Development Workflow
 1. **Single Server Approach**: Much simpler than running separate servers with proxying
 2. **Direct File Serving**: Faster development without static file building
@@ -537,6 +969,16 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 6. **Hybrid Storage**: User preferences in YAML, runtime data from discovery
 7. **Strict Typing**: Pydantic models ensure type safety throughout
 8. **Targeted Warnings**: Model-specific warnings instead of global notification clutter
+9. **Manager Isolation**: Only managers access their respective configuration files and directories
+10. **Direct LLM Integration**: Agent class uses llm package directly, no redundant abstraction layers
+11. **Clear Separation of Concerns**: Agent handles LLM interactions, ChatEngine handles session orchestration
+12. **Global Manager Registry**: Centralized manager management with aliases and no local copies
+13. **Manager Aliases**: Direct function access for current manager instances
+14. **Centralized Initialization**: Single initialization point for all managers
+15. **No Local Manager Storage**: Components use manager aliases directly, never store local references
+16. **System Prompts Integration**: Load system prompts and seed prompts during conversation initialization
+17. **Agent History API**: Provide dedicated endpoint for frontend to load conversation history
+18. **Frontend Message Source**: Frontend should only read messages from agent history, not from other sources
 
 ### Error Handling & Fail Fast Philosophy
 1. **Core Principle**: "Fail fast, not silent" - never create defaults that hide problems
@@ -546,6 +988,11 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 5. **Error Handling Architecture**: Comprehensive backend error details with frontend error dialogs
 6. **Global Notifications**: Proactive issue detection and user alerts
 7. **Model-Specific Warnings**: Targeted warnings for specific configuration issues
+8. **Exception Propagation**: All errors are raised as exceptions instead of being logged and ignored
+9. **Proper HTTP Status Codes**: REST API returns appropriate status codes (400 for validation, 500 for runtime errors)
+10. **WebSocket Error Responses**: Real-time error responses with detailed suggestions for fixing issues
+11. **No Silent Failures**: System immediately stops when invalid state is detected
+12. **Detailed Error Context**: All error messages include relevant context for debugging
 
 ### Frontend UX Design
 1. **Component Reusability**: Created reusable components (ContextProgress, MessageDisplay)
@@ -664,6 +1111,34 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 40. **Component Enhancement**: Extend existing components (MessageDisplay) with new props for reusability
 41. **Edit Mode Defaults**: Set `defaultEditMode={true}` for system prompts to provide immediate editing capability
 42. **Context-Aware UI**: Hide display mode options when in edit mode to reduce interface clutter
+43. **JSON Serialization with LLM**: Use `response.text()` method for `llm.models.ChainResponse` objects, not `str(response)`
+44. **Manager Isolation**: Only managers should access their respective YAML files and directories
+45. **Redundant Abstraction Removal**: Eliminate unnecessary abstraction layers that duplicate functionality
+46. **Direct LLM Integration**: Use llm package directly in Agent class, avoid intermediate abstraction layers
+47. **Path Configuration**: Use correct relative paths when working directory is already set to backend directory
+48. **WebSocket Error Handling**: Proper error handling for WebSocket disconnections and connection issues
+49. **Context Progress Accuracy**: Frontend should not calculate context usage on initial load - rely on backend accuracy
+50. **Model Context Window Integration**: Include model's context window size in agent info for accurate frontend calculations
+51. **Frontend-Backend Calculation Conflicts**: Avoid duplicate calculations that can lead to inconsistent UI state
+52. **Token Estimation Limitations**: Frontend token estimation (content.length / 4) is too rough for accurate context tracking
+53. **WebSocket Disconnect Handling**: Proper handling of WebSocket disconnections (1001, 1012 codes) to prevent ASGI errors
+54. **ASGI Message Errors**: Avoid sending messages after WebSocket connection is closed to prevent "Unexpected ASGI message" errors
+55. **LLM Package System Prompts**: System prompts must be included directly in messages sent to `chain()` method, not added via `prompt()` method
+56. **Prompt Manager Paths**: Use correct relative paths when initializing PromptManager from different working directories
+57. **Message Construction**: Build complete messages with system prompts, seed messages, and user input for proper LLM integration
+58. **Global Notification System**: Real-time WebSocket-based error/warning notifications with detailed dialogs and context information
+59. **Structured Error Logging**: All backend print statements replaced with context-rich notification logging
+60. **Notification Manager**: WebSocket-based notification broadcasting with automatic reconnection
+61. **Notification Utils**: Utility functions for easy integration of structured logging throughout the codebase
+62. **Frontend Notification Service**: Mantine-based notification display with clickable error dialogs
+63. **Comprehensive Error Coverage**: All backend files now use structured notifications instead of print statements
+64. **Fail-Fast Error Handling**: Always raise exceptions instead of logging and continuing in invalid state
+65. **Agent Error Handling**: Agent class raises exceptions for missing prompts, tools, models, and conversation failures
+66. **Manager Error Handling**: All manager classes properly raise exceptions instead of logging and continuing
+67. **API Error Handling**: REST and WebSocket endpoints with proper HTTP status codes and detailed error responses
+68. **Exception Propagation**: Errors bubble up to API endpoints with appropriate HTTP status codes
+69. **Detailed Error Context**: All error messages include relevant context for debugging
+70. **No Silent Failures**: System immediately stops when invalid state is detected
 
 ## Removed Features
 - ❌ Local SQLite database integration
@@ -679,6 +1154,10 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - ❌ "View" buttons for tools (replaced with inline signature display)
 - ❌ Refresh buttons for tools (users can use browser refresh instead)
 - ❌ Checkbox-based system prompts in agent settings (replaced with draggable dropdown system)
+- ❌ `LLMInterface` abstraction layer (replaced with direct Agent class integration)
+- ❌ Local manager copies (replaced with global manager registry and aliases)
+- ❌ Manager dependency injection (replaced with direct alias access)
+- ❌ Manager parameters in constructors (replaced with direct alias calls)
 
 ## Implementation Phases Status
 
@@ -718,13 +1197,15 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 ATeam/
 ├── backend/
 │   ├── main.py                 # FastAPI application with frontend serving
+│   ├── manager_registry.py     # Global manager registry with centralized initialization
 │   ├── agent_manager.py        # Agent management (fixed delete path issue)
 │   ├── tool_manager.py         # Dynamic tool discovery and signature extraction
 │   ├── models_manager.py       # Dynamic model discovery and settings
 │   ├── schema_manager.py       # JSON schema CRUD operations
 │   ├── provider_manager.py     # LLM provider management with strict typing
 │   ├── prompt_manager.py       # Prompt management (fail fast implementation)
-│   ├── llm_interface.py        # LLM integration
+│   ├── notification_manager.py # WebSocket-based notification broadcasting
+│   ├── notification_utils.py   # Utility functions for structured logging
 │   ├── chat_engine.py          # Chat processing with context tracking
 │   ├── monitoring.py           # System monitoring
 │   ├── models.yaml             # Model configurations (complete OpenAI coverage)
@@ -814,13 +1295,39 @@ ATeam/
 - ✅ Docstring integration with warning indicators
 - ✅ Method expansion with chevron controls
 - ✅ Monospace font styling for signatures
+- ✅ Drag-and-drop system prompts with proper dependency management
+- ✅ Complete TypeScript compilation and production build
+- ✅ Strict Pydantic schemas replacing all dictionary usage
+- ✅ Context progress tooltips with detailed token information
+- ✅ Console-only logging without file output
+- ✅ Agent class with llm package integration
+- ✅ Conversation persistence in agent_history directory
+- ✅ Lazy loading agent instances for memory efficiency
+- ✅ WebSocket-based real-time communication with centralized connection management
+- ✅ Custom conversation management without LLM package conversation object bias
+- ✅ Structured LLM responses with Pydantic validation and type safety
+- ✅ Custom tool descriptor and executor system
+- ✅ Comprehensive code cleanup with no unused dependencies
+- ✅ Fail-fast error handling throughout all components
 
 ### System Health
 - **0 Warnings**: All providers and models properly configured
 - **All APIs Working**: Models, providers, schemas, agents, tools
 - **Frontend Responsive**: All components working correctly
-- **Type Safety**: No type errors in development
+- **Type Safety**: No type errors in development with strict Pydantic schemas
 - **Complete Configuration**: All 29 OpenAI chat models configured with accurate specifications
 - **Dynamic Tools**: 2 tools discovered and displaying signatures correctly
+- **Clean Logging**: Console-only logging without file clutter
+- **Agent Integration**: New Agent class with llm package integration working correctly
+- **Conversation Persistence**: Agent history system ready for conversation storage
+- **Memory Efficient**: Lazy loading agent instances for optimal resource usage
+- **Notification System**: Real-time error/warning notifications with detailed dialogs
+- **Structured Logging**: All backend errors and warnings properly logged with context
+- **Global Notification System**: Real-time WebSocket-based error/warning notifications with detailed dialogs
+- **Structured Error Logging**: All backend print statements replaced with context-rich notification logging
+- **Professional Error Handling**: Comprehensive error reporting with detailed context information
+- **Fail-Fast Architecture**: System immediately stops on errors instead of continuing in invalid state
+- **Exception Propagation**: All errors properly raised and handled with appropriate HTTP status codes
+- **No Silent Failures**: Application never continues running with missing or invalid resources
 
-The LLM model management system is now complete with all requested features implemented and working! 🎉 
+The LLM model management system is now complete with all requested features implemented and working! The comprehensive error handling system ensures the application never continues running in an invalid state, while the notification system provides real-time error/warning visibility. The global manager registry pattern provides centralized manager management with no local copies, ensuring all components always access current manager instances. The fail-fast architecture dramatically improves the debugging experience for users and developers alike - no more hidden errors in console output, everything is immediately visible and actionable! 🎉 

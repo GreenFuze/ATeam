@@ -1,9 +1,10 @@
 export enum MessageType {
-  NORMAL_RESPONSE = "NORMAL_RESPONSE",
+  CHAT_RESPONSE = "CHAT_RESPONSE",
   USE_TOOL = "USE_TOOL",
   TOOL_RETURN = "TOOL_RETURN",
   AGENT_CALL = "AGENT_CALL",
   AGENT_RETURN = "AGENT_RETURN",
+  AGENT_DELEGATE = "AGENT_DELEGATE",
   REFINEMENT_RESPONSE = "REFINEMENT_RESPONSE",
   SYSTEM = "SYSTEM"
 }
@@ -12,6 +13,77 @@ export enum PromptType {
   SYSTEM = "system",
   SEED = "seed"
 }
+
+// Structured response interfaces
+export interface StructuredResponse {
+  action: string;
+  reasoning: string;
+}
+
+export interface ChatResponse extends StructuredResponse {
+  action: "CHAT_RESPONSE";
+  content: string;
+}
+
+export interface ToolCallResponse extends StructuredResponse {
+  action: "USE_TOOL";
+  tool: string;
+  args: Record<string, any>;
+}
+
+export interface ToolReturnResponse {
+  action: "TOOL_RETURN";
+  tool: string;
+  result: string;
+  success: "True" | "False";
+}
+
+export interface AgentDelegateResponse extends StructuredResponse {
+  action: "AGENT_DELEGATE";
+  agent: string;
+  caller_agent: string;
+  user_input: string;
+}
+
+export interface AgentCallResponse extends StructuredResponse {
+  action: "AGENT_CALL";
+  agent: string;
+  caller_agent: string;
+  user_input: string;
+}
+
+export interface AgentReturnResponse extends StructuredResponse {
+  action: "AGENT_RETURN";
+  agent: string;
+  returning_agent: string;
+  success: "True" | "False";
+}
+
+export interface RefinementChecklist {
+  objective: boolean;
+  inputs: boolean;
+  outputs: boolean;
+  constraints: boolean;
+}
+
+export interface RefinementResponse {
+  action: "REFINEMENT_RESPONSE";
+  new_plan: string;
+  done: "yes" | "no";
+  score: number;
+  why: string;
+  checklist: RefinementChecklist;
+  success: boolean;
+}
+
+export type StructuredResponseType = 
+  | ChatResponse
+  | ToolCallResponse
+  | ToolReturnResponse
+  | AgentDelegateResponse
+  | AgentCallResponse
+  | AgentReturnResponse
+  | RefinementResponse;
 
 export interface NavigationItem {
   label: string;
@@ -145,6 +217,8 @@ export interface ChatMessageResponse {
   session_id: string;
   agent_response: LLMResponse;
   context_usage?: number;
+  tokens_used?: number;
+  context_window?: number;
 }
 
 export interface ModelInfo {
@@ -181,4 +255,6 @@ export interface WebSocketResponse {
   agent_response: LLMResponse;
   session: any;
   context_usage?: number;
+  tokens_used?: number;
+  context_window?: number;
 } 

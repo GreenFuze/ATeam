@@ -3,11 +3,12 @@ import yaml
 from typing import Dict, List, Optional, Any
 from schemas import ModelInfo, ModelInfoView
 import llm
+from notification_utils import log_error, log_warning, log_info
 
 class ModelsManager:
     """Manages LLM model configurations and dynamic discovery"""
     
-    def __init__(self, config_path: str = "backend/models.yaml"):
+    def __init__(self, config_path: str = "models.yaml"):
         self.config_path = config_path
         self.models: Dict[str, ModelInfo] = {}
         self.load_models()
@@ -38,9 +39,9 @@ class ModelsManager:
                         )
                         self.models[model_id] = model_info
             else:
-                print(f"Warning: models.yaml not found at {self.config_path}")
+                log_warning("ModelsManager", f"models.yaml not found at {self.config_path}", {"config_path": self.config_path})
         except Exception as e:
-            print(f"Error loading models.yaml: {e}")
+            raise RuntimeError(f"Error loading models.yaml from {self.config_path}: {str(e)}")
     
     def save_models(self) -> None:
         """Save models to YAML configuration file"""
@@ -132,7 +133,7 @@ class ModelsManager:
                     }
                 
         except Exception as e:
-            print(f"Error discovering models from llm: {e}")
+            raise RuntimeError(f"Error discovering models from llm: {str(e)}")
         
         return discovered_models
     
@@ -194,7 +195,7 @@ class ModelsManager:
                     schema = self._enhance_schema_with_types(schema, type_fields)
                     return schema
             except Exception as e:
-                print(f"Error loading OpenAI schema: {e}")
+                log_error("ModelsManager", "Error loading OpenAI schema", e, {"provider": "openai", "is_embedding": is_embedding_model})
         elif provider_name == 'ollama':
             try:
                 if is_embedding_model:
@@ -227,7 +228,9 @@ class ModelsManager:
                     schema = self._enhance_schema_with_types(schema, type_fields)
                     return schema
             except Exception as e:
-                print(f"Error loading Ollama schema: {e}")
+                log_error("ModelsManager", "Error loading Ollama schema", e, {"provider": "ollama", "is_embedding": is_embedding_model})
+        else:
+            log_error("ModelsManager", f"Unknown provider: {provider_name}", None, {"provider": provider_name, "is_embedding": is_embedding_model})
         
         return {}
 

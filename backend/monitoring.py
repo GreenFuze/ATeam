@@ -19,7 +19,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('ateam.log'),
         logging.StreamHandler()
     ]
 )
@@ -162,7 +161,16 @@ class ErrorTracker:
         self.errors.append(error_data)
         self.error_counts[type(error).__name__] += 1
         
-        logger.error(f"Error tracked: {error_data}")
+        # Enhanced error logging with more details
+        error_msg = f"Error tracked: {error_data}"
+        if hasattr(error, 'code') and hasattr(error, 'reason'):
+            error_msg += f" (Code: {error.code}, Reason: {error.reason})"
+        elif isinstance(error, Exception) and len(str(error)) > 0:
+            error_msg += f" (Details: {str(error)})"
+        
+        logger.error(error_msg)
+        # Also print to stdout for immediate visibility
+        print(f"❌ ERROR: {error_msg}")
     
     def get_error_summary(self, hours: int = 24) -> Dict[str, Any]:
         """Get error summary for the last N hours"""
@@ -251,9 +259,8 @@ def monitor_performance(metric_name: str):
 def check_llm_health():
     """Check LLM service availability"""
     try:
-        from llm_interface import LLMInterface
-        llm = LLMInterface()
-        models = llm.get_available_models()
+        import llm
+        models = llm.get_models()
         return {
             'status': 'healthy', 
             'message': f'LLM service OK, {len(models)} models available'

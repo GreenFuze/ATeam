@@ -49,11 +49,14 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
         return <IconTool size={16} />;
       case MessageType.AGENT_CALL:
       case MessageType.AGENT_RETURN:
+      case MessageType.AGENT_DELEGATE:
         return <IconBrain size={16} />;
       case MessageType.SYSTEM:
         return <IconSettings size={16} />;
-      case MessageType.NORMAL_RESPONSE:
+      case MessageType.CHAT_RESPONSE:
         return <IconMessage size={16} />;
+      case MessageType.REFINEMENT_RESPONSE:
+        return <IconEdit size={16} />;
       default:
         return <IconQuestionMark size={16} />;
     }
@@ -66,13 +69,17 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
       case MessageType.TOOL_RETURN:
         return 'Tool Result';
       case MessageType.AGENT_CALL:
-        return 'Agent Delegation';
+        return 'Agent Call';
       case MessageType.AGENT_RETURN:
-        return 'Agent Response';
+        return 'Agent Return';
+      case MessageType.AGENT_DELEGATE:
+        return 'Agent Delegation';
       case MessageType.SYSTEM:
         return 'System Message';
-      case MessageType.NORMAL_RESPONSE:
-        return 'Normal Response';
+      case MessageType.CHAT_RESPONSE:
+        return 'Chat Response';
+      case MessageType.REFINEMENT_RESPONSE:
+        return 'Refinement Response';
       default:
         return `Unknown message type: ${messageType}`;
     }
@@ -85,11 +92,14 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
         return 'yellow';
       case MessageType.AGENT_CALL:
       case MessageType.AGENT_RETURN:
+      case MessageType.AGENT_DELEGATE:
         return 'purple';
       case MessageType.SYSTEM:
         return 'gray';
-      case MessageType.NORMAL_RESPONSE:
+      case MessageType.CHAT_RESPONSE:
         return 'blue';
+      case MessageType.REFINEMENT_RESPONSE:
+        return 'orange';
       default:
         return 'red';
     }
@@ -270,7 +280,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
             </Text>
           </div>
 
-          {message.message_type !== MessageType.NORMAL_RESPONSE && (
+          {message.message_type !== MessageType.CHAT_RESPONSE && (
             <Badge size="xs" variant="light" color={getMessageColor(message.message_type)}>
               {message.message_type.replace('_', ' ')}
             </Badge>

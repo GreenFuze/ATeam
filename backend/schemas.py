@@ -4,17 +4,93 @@ from enum import Enum
 import json
 
 class MessageType(str, Enum):
-    NORMAL_RESPONSE = "NORMAL_RESPONSE"
+    CHAT_RESPONSE = "CHAT_RESPONSE"
     USE_TOOL = "USE_TOOL"
     TOOL_RETURN = "TOOL_RETURN"
     AGENT_CALL = "AGENT_CALL"
     AGENT_RETURN = "AGENT_RETURN"
+    AGENT_DELEGATE = "AGENT_DELEGATE"
     REFINEMENT_RESPONSE = "REFINEMENT_RESPONSE"
     SYSTEM = "SYSTEM"
+
+class MessageIcon(str, Enum):
+    CHAT = "chat"
+    TOOL = "tool"
+    AGENT = "agent"
+    ERROR = "error"
+    WARNING = "warning"
+    SUCCESS = "success"
+    INFO = "info"
 
 class PromptType(str, Enum):
     SYSTEM = "system"
     SEED = "seed"
+
+# Base class for all structured responses
+class StructuredResponse(BaseModel):
+    action: str
+    reasoning: str
+
+# Specific response classes
+class ChatResponse(StructuredResponse):
+    action: str = Field(default="CHAT_RESPONSE")
+    content: str
+    icon: Optional[MessageIcon] = None
+
+class ToolCallResponse(StructuredResponse):
+    action: str = Field(default="USE_TOOL")
+    tool: str
+    args: Dict[str, Any]
+
+class ToolReturnResponse(BaseModel):
+    action: str = Field(default="TOOL_RETURN")
+    tool: str
+    result: str
+    success: str = Field(..., pattern="^(True|False)$")
+
+class AgentDelegateResponse(StructuredResponse):
+    action: str = Field(default="AGENT_DELEGATE")
+    agent: str
+    caller_agent: str
+    user_input: str
+
+class AgentCallResponse(StructuredResponse):
+    action: str = Field(default="AGENT_CALL")
+    agent: str
+    caller_agent: str
+    user_input: str
+
+class AgentReturnResponse(StructuredResponse):
+    action: str = Field(default="AGENT_RETURN")
+    agent: str
+    returning_agent: str
+    success: str = Field(..., pattern="^(True|False)$")
+
+class RefinementChecklist(BaseModel):
+    objective: bool
+    inputs: bool
+    outputs: bool
+    constraints: bool
+
+class RefinementResponse(BaseModel):
+    action: str = Field(default="REFINEMENT_RESPONSE")
+    new_plan: str
+    done: str = Field(..., pattern="^(yes|no)$")
+    score: int = Field(..., ge=0, le=100)
+    why: str
+    checklist: RefinementChecklist
+    success: bool
+
+# Union type for all possible responses
+StructuredResponseType = Union[
+    ChatResponse,
+    ToolCallResponse,
+    ToolReturnResponse,
+    AgentDelegateResponse,
+    AgentCallResponse,
+    AgentReturnResponse,
+    RefinementResponse
+]
 
 class AgentConfig(BaseModel):
     id: str
@@ -82,6 +158,7 @@ class LLMResponse(BaseModel):
     # Structured response fields
     action: Optional[str] = None
     reasoning: Optional[str] = None
+    icon: Optional[MessageIcon] = None
     tool_name: Optional[str] = None
     tool_parameters: Optional[Dict[str, Any]] = None
     target_agent_id: Optional[str] = None
@@ -191,4 +268,40 @@ class ModelInfoView(BaseModel):
     truncate: bool = False
     supports_binary: bool = False
     supports_text: bool = False
-    embed_batch: bool = False 
+    embed_batch: bool = False
+
+class ContextUsageData(BaseModel):
+    """Context usage information for a conversation"""
+    percentage: float = Field(ge=0.0, le=100.0, description="Percentage of context window used")
+    tokens_used: int = Field(ge=0, description="Number of tokens used in conversation")
+    context_window: Optional[int] = Field(None, ge=0, description="Total context window size in tokens")
+
+class ConversationResponseData(BaseModel):
+    """Response data for conversation processing"""
+    session_id: str
+    agent_response: LLMResponse
+    session: ChatSession
+    context_usage: float = Field(ge=0.0, le=100.0, description="Percentage of context window used")
+    tokens_used: Optional[int] = Field(None, ge=0, description="Number of tokens used")
+    context_window: Optional[int] = Field(None, ge=0, description="Total context window size")
+    messages_to_send: List[LLMResponse] = Field(default_factory=list, description="Messages to send to frontend")
+
+class AgentInfo(BaseModel):
+    """Agent information returned by Agent class"""
+    id: str
+    name: str
+    description: str
+    model: str
+    tools: List[str] = Field(default_factory=list, description="List of tool names")
+    conversation_initialized: bool = False
+
+class ConversationData(BaseModel):
+    """Conversation data for persistence"""
+    session_id: str
+    agent_id: str
+    agent_name: str
+    model: str
+    created_at: str
+    responses: List[Dict[str, Any]] = Field(default_factory=list, description="List of conversation responses")
+
+ 

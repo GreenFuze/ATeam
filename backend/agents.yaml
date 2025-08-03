@@ -4,15 +4,15 @@ agents:
   enable_scratchpad: true
   enable_summarization: true
   grammar_file: null
-  id: god
+  id: zeus
   max_tokens: null
   model: llama3.1:8b
   name: Zeus
   prompts:
-  - god_system.md
+  - zeus_system.md
+  - how_to_respond_no_schema_or_grammar.md
   schema_file: null
   temperature: 0.5
   tools:
-  - CreateAgent
-  - CreateTool
-  updated_at: '2025-08-01T10:28:16.165071'
+  - add
+  updated_at: '2025-08-03T18:05:09.652173'

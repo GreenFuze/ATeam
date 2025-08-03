@@ -2,18 +2,16 @@ import json
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from schemas import Message, ChatSession, LLMResponse, MessageType
+from schemas import Message, ChatSession, LLMResponse, MessageType, ContextUsageData, ConversationResponseData
 import asyncio
+from manager_registry import agent_manager, tool_manager, prompt_manager, models_manager
+
 
 class ChatEngine:
-    def __init__(self, agent_manager, tool_manager, prompt_manager, llm_interface):
-        self.agent_manager = agent_manager
-        self.tool_manager = tool_manager
-        self.prompt_manager = prompt_manager
-        self.llm_interface = llm_interface
+    def __init__(self):
         self.sessions: Dict[str, ChatSession] = {}
         
-    async def process_message(self, agent_id: str, content: str, session_id: Optional[str] = None) -> Dict[str, Any]:
+    async def process_message(self, agent_id: str, content: str, session_id: Optional[str] = None) -> ConversationResponseData:
         """
         Process a message through the chat engine
         
@@ -29,6 +27,8 @@ class ChatEngine:
         if not session_id:
             session_id = str(uuid.uuid4())
         
+        messages_to_send = []  # Track messages that need to be sent to frontend
+        
         if session_id not in self.sessions:
             self.sessions[session_id] = ChatSession(
                 id=session_id,
@@ -38,18 +38,14 @@ class ChatEngine:
                 updated_at=datetime.now().isoformat()
             )
             
-            # Add system message for new sessions
-            agent = self.agent_manager.get_agent(agent_id)
-            if agent:
-                system_prompt = self._build_system_prompt(agent)
-                system_message = Message(
-                    id=str(uuid.uuid4()),
-                    agent_id=agent_id,
-                    content=system_prompt,
-                    message_type=MessageType.SYSTEM,
-                    timestamp=datetime.now().isoformat()
-                )
-                self.sessions[session_id].messages.append(system_message)
+            # Create system message for new sessions
+            system_message = await self._create_system_message(agent_id, session_id)
+            if system_message:
+                messages_to_send.append(system_message)
+            
+            # Create seed messages for new sessions
+            seed_messages = await self._create_seed_messages(agent_id, session_id)
+            messages_to_send.extend(seed_messages)
         
         session = self.sessions[session_id]
         
@@ -58,7 +54,7 @@ class ChatEngine:
             id=str(uuid.uuid4()),
             agent_id=agent_id,
             content=content,
-            message_type=MessageType.NORMAL_RESPONSE,
+            message_type=MessageType.CHAT_RESPONSE,
             timestamp=datetime.now().isoformat()
         )
         
@@ -69,247 +65,133 @@ class ChatEngine:
         # Process through agent
         agent_response = await self._process_with_agent(agent_id, content, session)
         
-        # Create agent message
+        # Create agent message for the session
         agent_message = Message(
             id=str(uuid.uuid4()),
             agent_id=agent_id,
             content=agent_response.content,
-            message_type=agent_response.message_type,
-            timestamp=datetime.now().isoformat(),
-            metadata=agent_response.metadata,
-            tool_name=agent_response.tool_name,
-            tool_parameters=agent_response.tool_parameters,
-            target_agent_id=agent_response.target_agent_id,
-            action=agent_response.action,
-            reasoning=agent_response.reasoning
+            message_type=MessageType.CHAT_RESPONSE,
+            timestamp=datetime.now().isoformat()
         )
         
         # Add agent message to session
         session.messages.append(agent_message)
-        session.updated_at = datetime.now().isoformat()
         
-        # Handle tool execution if needed
-        if agent_response.message_type == MessageType.USE_TOOL:
-            if agent_response.tool_name and agent_response.tool_parameters:
-                tool_result = await self._execute_tool(agent_response.tool_name, agent_response.tool_parameters)
-                
-                # Create tool return message
-                tool_message = Message(
-                    id=str(uuid.uuid4()),
-                    agent_id=agent_id,
-                    content=json.dumps(tool_result),
-                    message_type=MessageType.TOOL_RETURN,
-                    timestamp=datetime.now().isoformat(),
-                    tool_name=agent_response.tool_name,
-                    tool_result=tool_result
-                )
-                
-                session.messages.append(tool_message)
-                session.updated_at = datetime.now().isoformat()
-                
-                # Process tool result through agent
-                tool_response = await self._process_tool_result(agent_id, tool_result, session)
-                
-                # Add tool response to session
-                tool_response_message = Message(
-                    id=str(uuid.uuid4()),
-                    agent_id=agent_id,
-                    content=tool_response.content,
-                    message_type=tool_response.message_type,
-                    timestamp=datetime.now().isoformat(),
-                    metadata=tool_response.metadata,
-                    action=tool_response.action,
-                    reasoning=tool_response.reasoning
-                )
-                
-                session.messages.append(tool_response_message)
-                session.updated_at = datetime.now().isoformat()
-                
-                # Update final response
-                agent_response = tool_response
-        
-        # Handle agent delegation if needed
-        elif agent_response.message_type == MessageType.AGENT_CALL:
-            if agent_response.target_agent_id:
-                delegated_response = await self._delegate_to_agent(
-                    agent_response.target_agent_id, 
-                    content, 
-                    session
-                )
-                
-                # Create agent return message
-                agent_return_message = Message(
-                    id=str(uuid.uuid4()),
-                    agent_id=agent_response.target_agent_id,
-                    content=delegated_response.content,
-                    message_type=MessageType.AGENT_RETURN,
-                    timestamp=datetime.now().isoformat(),
-                    metadata=delegated_response.metadata,
-                    action=delegated_response.action,
-                    reasoning=delegated_response.reasoning
-                )
-                
-                session.messages.append(agent_return_message)
-                session.updated_at = datetime.now().isoformat()
-                
-                # Update final response
-                agent_response = delegated_response
+        # Add agent response to messages to send
+        messages_to_send.append(agent_response)
         
         # Update session summary if enabled
         if self._should_update_summary(session):
             session.summary = await self._generate_summary(session)
         
         # Calculate context usage
-        context_usage = self._calculate_context_usage(session, agent_id)
+        context_usage_data = self._calculate_context_usage(session, agent_id)
         
-        return {
-            "session_id": session_id,
-            "agent_response": agent_response.model_dump(),
-            "session": session.model_dump(),
-            "context_usage": context_usage
-        }
+        return ConversationResponseData(
+            session_id=session_id,
+            agent_response=agent_response,
+            session=session,
+            context_usage=context_usage_data.percentage,
+            tokens_used=context_usage_data.tokens_used,
+            context_window=context_usage_data.context_window,
+            messages_to_send=messages_to_send  # Add this field
+        )
     
     async def _process_with_agent(self, agent_id: str, content: str, session: ChatSession) -> LLMResponse:
         """Process message with a specific agent"""
-        # Get agent configuration
-        agent = self.agent_manager.get_agent(agent_id)
-        if not agent:
+        # Get agent instance
+        agent_instance = agent_manager().get_agent(agent_id)
+        if not agent_instance:
             raise ValueError(f"Agent '{agent_id}' not found")
         
-        # Build conversation context
-        messages = self._build_conversation_context(agent, session)
-        
-        # Add current user message
-        messages.append({"role": "user", "content": content})
-        
-        # Get agent's tools
-        tools = []
-        for tool_name in agent.tools:
-            tool = self.tool_manager.get_tool(tool_name)
-            if tool:
-                tools.append(tool.model_dump())
-        
-        # Get agent's prompts
-        system_prompt = self._build_system_prompt(agent)
-        
-        # Inject schema/grammar instructions based on model capabilities
-        system_prompt = self.llm_interface.inject_schema_instructions(system_prompt, agent.model)
-        system_prompt = self.llm_interface.inject_grammar_instructions(system_prompt, agent.model)
-        
-        # Add system prompt to messages
-        messages.insert(0, {"role": "system", "content": system_prompt})
-        
-        # Get schema for tools if model supports it
-        schema = None
-        if self.llm_interface.supports_schema(agent.model) and tools:
-            schema = self.llm_interface.get_tool_schema(tools)
-        
-        # Make LLM request
-        response = await self.llm_interface.chat(
-            model_id=agent.model,
-            messages=messages,
-            temperature=agent.temperature,
-            max_tokens=agent.max_tokens,
-            schema=schema,
-            tools=tools
-        )
+        # Get response from agent
+        response = agent_instance.get_response(content)
         
         return response
     
-    def _build_conversation_context(self, agent, session: ChatSession) -> List[Dict[str, str]]:
-        """Build conversation context from session history"""
-        messages = []
+    async def _create_system_message(self, agent_id: str, session_id: str) -> Optional[LLMResponse]:
+        """Create system message for new sessions"""
+        agent = agent_manager().get_agent(agent_id)
+        if not agent:
+            return None
         
-        # Add recent messages (limit to last 10 for context)
-        recent_messages = session.messages[-10:] if len(session.messages) > 10 else session.messages
+        # Build system prompt
+        system_prompt = self._build_system_prompt(agent)
         
-        for msg in recent_messages:
-            if msg.message_type == MessageType.NORMAL_RESPONSE:
-                role = "user" if msg.content.startswith("User:") else "assistant"
-                content = msg.content.replace("User: ", "").replace("Assistant: ", "")
-                messages.append({"role": role, "content": content})
-            elif msg.message_type == MessageType.TOOL_RETURN:
-                messages.append({
-                    "role": "assistant", 
-                    "content": f"Tool {msg.tool_name} returned: {msg.content}"
-                })
-            elif msg.message_type == MessageType.AGENT_RETURN:
-                messages.append({
-                    "role": "assistant",
-                    "content": f"Agent {msg.agent_id} returned: {msg.content}"
-                })
+        system_message = Message(
+            id=str(uuid.uuid4()),
+            agent_id=agent_id,
+            content=system_prompt,
+            message_type=MessageType.SYSTEM,
+            timestamp=datetime.now().isoformat()
+        )
         
-        return messages
+        # Add to session
+        session = self.sessions[session_id]
+        session.messages.append(system_message)
+        
+        # Return as LLMResponse for frontend
+        return LLMResponse(
+            content=system_prompt,
+            action="SYSTEM_MESSAGE",
+            reasoning="System initialization",
+            message_type=MessageType.SYSTEM
+        )
+    
+    async def _create_seed_messages(self, agent_id: str, session_id: str) -> List[LLMResponse]:
+        """Create seed messages for new sessions"""
+        agent = agent_manager().get_agent(agent_id)
+        if not agent:
+            return []
+        
+        session = self.sessions[session_id]
+        messages_to_send = []
+        
+        # Create each seed message
+        for seed_message in agent.seed_messages:
+            message = Message(
+                id=str(uuid.uuid4()),
+                agent_id=agent_id,
+                content=seed_message.content,
+                message_type=MessageType.SYSTEM if seed_message.role == "system" else MessageType.CHAT_RESPONSE,
+                timestamp=datetime.now().isoformat()
+            )
+            
+            # Add to session
+            session.messages.append(message)
+            
+            # Add to messages to send
+            messages_to_send.append(LLMResponse(
+                content=seed_message.content,
+                action="SEED_MESSAGE",
+                reasoning="Initial conversation setup",
+                message_type=MessageType.SYSTEM if seed_message.role == "system" else MessageType.CHAT_RESPONSE
+            ))
+        
+        return messages_to_send
+    
+    async def _send_agent_response(self, agent_id: str, response: LLMResponse, session_id: str) -> None:
+        """Send agent response via WebSocket"""
+        # Note: WebSocket communication is now handled directly in main.py
     
     def _build_system_prompt(self, agent) -> str:
         """Build system prompt from agent's prompt files"""
         prompt_parts = []
         
         # Add agent description
-        prompt_parts.append(f"You are {agent.name}: {agent.description}")
+        prompt_parts.append(f"You are {agent.config.name}: {agent.config.description}")
         
-        # Add prompt files content
-        for prompt_name in agent.prompts:
-            prompt_content = self.prompt_manager.get_prompt_content(prompt_name)
-            if prompt_content:
-                prompt_parts.append(prompt_content)
+        # Add system prompt
+        if agent.system_prompt:
+            prompt_parts.append(agent.system_prompt)
         
         # Add available tools information
-        if agent.tools:
-            tools_info = "Available tools:\n"
-            for tool_name in agent.tools:
-                tool = self.tool_manager.get_tool(tool_name)
-                if tool:
-                    tools_info += f"- {tool.name}: {tool.description}\n"
-            prompt_parts.append(tools_info)
+        if agent.config.tools:
+            tools_prompt = tool_manager().get_tool_prompt_for_agent(agent.config.tools)
+            if tools_prompt:
+                prompt_parts.append(tools_prompt)
         
         return "\n\n".join(prompt_parts)
-    
-    async def _execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute a tool with given parameters"""
-        if not tool_name:
-            return {"success": False, "error": "No tool name provided"}
-        
-        try:
-            result = self.tool_manager.execute_tool(tool_name, **parameters)
-            return result
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    async def _process_tool_result(self, agent_id: str, tool_result: Dict[str, Any], session: ChatSession) -> LLMResponse:
-        """Process tool result through the agent"""
-        # Create a message about the tool result
-        tool_message = f"Tool execution result: {json.dumps(tool_result)}"
-        
-        # Process through agent
-        return await self._process_with_agent(agent_id, tool_message, session)
-    
-    async def _delegate_to_agent(self, target_agent_id: str, content: str, session: ChatSession) -> LLMResponse:
-        """Delegate message to another agent"""
-        if not target_agent_id:
-            return LLMResponse(
-                content="Error: No target agent specified for delegation",
-                message_type=MessageType.NORMAL_RESPONSE,
-                metadata={"error": "No target agent"}
-            )
-        
-        # Create a new session for the delegated agent
-        delegated_session = ChatSession(
-            id=str(uuid.uuid4()),
-            agent_id=target_agent_id,
-            messages=[],
-            created_at=datetime.now().isoformat(),
-            updated_at=datetime.now().isoformat()
-        )
-        
-        # Process with delegated agent
-        result = await self.process_message(target_agent_id, content, delegated_session.id)
-        
-        return LLMResponse(
-            content=result["agent_response"]["content"],
-            message_type=MessageType.AGENT_RETURN,
-            metadata={"delegated_from": session.agent_id, "delegated_to": target_agent_id}
-        )
     
     def _should_update_summary(self, session: ChatSession) -> bool:
         """Check if session summary should be updated"""
@@ -323,7 +205,7 @@ class ChatEngine:
         
         summary_parts = []
         for msg in recent_messages:
-            if msg.message_type == MessageType.NORMAL_RESPONSE:
+            if msg.message_type == MessageType.CHAT_RESPONSE:
                 summary_parts.append(f"{msg.agent_id}: {msg.content[:100]}...")
         
         return " | ".join(summary_parts)
@@ -354,22 +236,17 @@ class ChatEngine:
         for session_id in sessions_to_delete:
             del self.sessions[session_id] 
 
-    def _calculate_context_usage(self, session: ChatSession, agent_id: str) -> float:
-        """Calculate the percentage of context window used"""
-        agent = self.agent_manager.get_agent(agent_id)
+    def _calculate_context_usage(self, session: ChatSession, agent_id: str) -> ContextUsageData:
+        """Calculate the percentage of context window used and token information"""
+        agent = agent_manager().get_agent(agent_id)
         if not agent:
-            return 0.0
+            return ContextUsageData(percentage=0.0, tokens_used=0, context_window=None)
         
         # Get the model's context window size from models manager
-        # We need to import models_manager here to avoid circular imports
-        from models_manager import ModelsManager
-        models_manager = ModelsManager()
-        
-        # Get model info to check context window size
-        model_info = models_manager.get_model(agent.model)
+        model_info = models_manager().get_model(agent.config.model)
         if not model_info or not model_info.context_window_size:
             # If no context window size is set, return 0 (N/A)
-            return 0.0
+            return ContextUsageData(percentage=0.0, tokens_used=0, context_window=None)
         
         context_window_size = model_info.context_window_size
         
@@ -381,7 +258,11 @@ class ChatEngine:
         
         # Calculate percentage
         if context_window_size <= 0:
-            return 0.0
+            return ContextUsageData(percentage=0.0, tokens_used=total_tokens, context_window=context_window_size)
         
         percentage = (total_tokens / context_window_size) * 100
-        return min(percentage, 100.0)  # Cap at 100% 
+        return ContextUsageData(
+            percentage=min(percentage, 100.0),  # Cap at 100%
+            tokens_used=total_tokens,
+            context_window=context_window_size
+        ) 

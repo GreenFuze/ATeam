@@ -5,6 +5,9 @@ from typing import Dict, List, Optional, Any
 from schemas import ToolConfig
 import json
 import ast
+from notification_utils import log_error, log_warning, log_info
+from tool_descriptor import get_tool_prompt_for_agent
+from tool_executor import run_tool
 
 class ToolManager:
     def __init__(self, tools_dir: str = "tools"):
@@ -15,7 +18,7 @@ class ToolManager:
     def discover_tools(self):
         """Discover tools from Python files in the tools directory"""
         if not os.path.exists(self.tools_dir):
-            print(f"Warning: Tools directory {self.tools_dir} not found")
+            log_warning("ToolManager", f"Tools directory {self.tools_dir} not found", {"tools_dir": self.tools_dir})
             return
             
         # Get the absolute path of the tools directory
@@ -32,7 +35,7 @@ class ToolManager:
             # Load the module
             spec = importlib.util.spec_from_file_location("tools_module", file_path)
             if spec is None or spec.loader is None:
-                print(f"Could not load module from {file_path}")
+                log_warning("ToolManager", f"Could not load module from {file_path}", {"file_path": file_path})
                 return
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
@@ -57,38 +60,26 @@ class ToolManager:
                     }
                     self.tools[name] = tool_info
             
-            # Discover classes that implement llm.Toolbox
+            # Discover classes (public classes not starting with _)
             for name, obj in inspect.getmembers(module):
                 if (inspect.isclass(obj) and 
+                    not name.startswith('_') and
                     obj.__module__ == module.__name__):
                     
-                    # Check if the class implements llm.Toolbox
-                    if self._implements_llm_toolbox(obj):
-                        methods = self._get_public_methods(obj)
-                        tool_info = {
-                            'name': name,
-                            'type': 'class',
-                            'description': obj.__doc__ or None,
-                            'file_path': file_path,
-                            'relative_path': os.path.relpath(file_path, tools_abs_path),
-                            'has_docstring': bool(obj.__doc__),
-                            'methods': methods
-                        }
-                        self.tools[name] = tool_info
+                    methods = self._get_public_methods(obj)
+                    tool_info = {
+                        'name': name,
+                        'type': 'class',
+                        'description': obj.__doc__ or None,
+                        'file_path': file_path,
+                        'relative_path': os.path.relpath(file_path, tools_abs_path),
+                        'has_docstring': bool(obj.__doc__),
+                        'methods': methods
+                    }
+                    self.tools[name] = tool_info
                         
         except Exception as e:
-            print(f"Error discovering tools from {file_path}: {e}")
-    
-    def _implements_llm_toolbox(self, cls) -> bool:
-        """Check if a class implements llm.Toolbox"""
-        try:
-            # Check if the class has llm.Toolbox in its bases
-            for base in cls.__mro__:
-                if base.__name__ == 'Toolbox' and 'llm' in str(base.__module__):
-                    return True
-            return False
-        except:
-            return False
+            raise RuntimeError(f"Error discovering tools from {file_path}: {str(e)}")
     
     def _get_public_methods(self, cls) -> List[Dict[str, Any]]:
         """Get all public methods from a class"""
@@ -124,6 +115,9 @@ class ToolManager:
                 sig_str = '(' + sig_str[7:]
             elif sig_str.startswith('(self)'):
                 sig_str = '()'
+            else:
+                # No 'self' parameter, keep as is
+                pass
             
             return sig_str
         except Exception as e:
@@ -152,4 +146,16 @@ class ToolManager:
     
     def get_tools_directory_path(self) -> str:
         """Get the full path of the tools directory"""
-        return os.path.abspath(self.tools_dir) 
+        return os.path.abspath(self.tools_dir)
+    
+    def get_tool_prompt_for_agent(self, tool_names: List[str]) -> str:
+        """Generate a prompt-friendly description of tools for an agent"""
+        return get_tool_prompt_for_agent(tool_names, self)
+    
+    def execute_tool(self, tool_name: str, **kwargs) -> Any:
+        """Execute a tool using the new tool executor"""
+        result = run_tool(tool_name, kwargs)
+        if result.success == "True":
+            return result.result
+        else:
+            raise RuntimeError(f"Tool execution failed: {result.result}") 

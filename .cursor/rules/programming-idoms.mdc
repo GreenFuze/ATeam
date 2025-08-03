@@ -1,0 +1,7 @@
+---
+alwaysApply: true
+---
+Use the following programming instructions when writing any code:
+- Fail-Fast Philosophy with no fallback: If something is unexpected, fail immediately with a clear error. Do not write fallback logic, unless explicitly stated.
+- In If-else-if or switch-case, in the case there's default logic, use the default to fail
+- If your confidence in the task is not 100%, ask the user to reach 100% before starting

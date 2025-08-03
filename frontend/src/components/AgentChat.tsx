@@ -5,8 +5,8 @@ import {
   ScrollArea, Box, Text
 } from '@mantine/core';
 import { IconSend, IconBrain } from '@tabler/icons-react';
-import { Message, MessageType, ChatMessageResponse, WebSocketResponse } from '../types';
-import { chatApi, WebSocketService } from '../api';
+import { Message, MessageType, ChatMessageResponse } from '../types';
+import { chatApi, WebSocketService, agentsApi } from '../api';
 import { ErrorHandler } from '../utils/errorHandler';
 import MessageDisplay from './MessageDisplay';
 import ContextProgress from './ContextProgress';
@@ -16,15 +16,20 @@ interface AgentChatProps {
   sessionId?: string;
 }
 
-const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId }) => {
+const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [wsService, setWsService] = useState<WebSocketService | null>(null);
-  const [contextUsage, setContextUsage] = useState(0); // Percentage of context window used
+  const [contextUsage, setContextUsage] = useState<number | null>(null); // Percentage of context window used
+  const [tokensUsed, setTokensUsed] = useState<number | null>(null);
+  const [contextWindow, setContextWindow] = useState<number | null>(null);
   const [agentInfo, setAgentInfo] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  
+  // Generate a persistent session ID if not provided
+  const [sessionId] = useState(() => propSessionId || `session_${agentId}_${Date.now()}`);
 
   useEffect(() => {
     if (agentId) {
@@ -39,10 +44,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId }) => {
     };
   }, [agentId]);
 
-  // Load system prompts after agentInfo is loaded
+  // Load agent history after agentInfo is loaded
   useEffect(() => {
-    if (agentInfo && agentInfo.prompts) {
-      loadSystemPrompt();
+    if (agentInfo) {
+      loadAgentHistory();
     }
   }, [agentInfo]);
 
@@ -61,9 +66,11 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId }) => {
   const initializeWebSocket = async () => {
     try {
       const ws = new WebSocketService();
+    console.log('🔍 DEBUG: Frontend WebSocket service created');
       await ws.connect(agentId);
       
       ws.addListener('message', handleWebSocketMessage);
+    console.log('🔍 DEBUG: Frontend WebSocket message listener added');
       setWsService(ws);
       
       notifications.show({
@@ -92,73 +99,115 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId }) => {
     }
   };
 
-  const loadSystemPrompt = async () => {
+  const loadAgentHistory = async () => {
     try {
-      // Load system prompts for the agent
-      const systemPrompts: Message[] = [];
+      // Load conversation history from agent
+      const history = await agentsApi.getHistory(agentId, sessionId);
       
-      if (agentInfo?.prompts) {
-        for (const promptName of agentInfo.prompts) {
-          try {
-            const response = await fetch(`/api/prompts/${promptName}`);
-            if (!response.ok) {
-              const errorData = await response.json().catch(() => ({}));
-              const error = new Error(`Failed to load prompt ${promptName}: ${response.status} ${response.statusText}`);
-              (error as any).response = { data: errorData, status: response.status, statusText: response.statusText };
-              throw error;
-            }
-            const prompt = await response.json();
-            
-            systemPrompts.push({
+      if (history.messages && history.messages.length > 0) {
+        setMessages(history.messages);
+      } else {
+        // If no conversation history, load system prompts as initial messages
+        await loadSystemPrompts();
+      }
+      
+      // Set progress bar to N/A initially - will be updated after first message
+      setContextUsage(null);
+      setTokensUsed(null);
+      setContextWindow(null);
+    } catch (error) {
+      ErrorHandler.showError(error, 'Failed to Load Agent History');
+    }
+  };
+
+  const loadSystemPrompts = async () => {
+    try {
+      if (!agentInfo?.prompts) return;
+      
+      const systemMessages: Message[] = [];
+      
+      for (const promptName of agentInfo.prompts) {
+        try {
+          const response = await fetch(`/api/prompts/${promptName}`);
+          if (!response.ok) {
+            console.warn(`Failed to load prompt ${promptName}: ${response.status}`);
+            continue;
+          }
+          
+          const prompt = await response.json();
+          
+          // Only show system prompts, not seed prompts
+          if (prompt.type === 'system') {
+            systemMessages.push({
               id: `system-${promptName}`,
               agent_id: agentId,
               content: prompt.content,
               message_type: MessageType.SYSTEM,
               timestamp: new Date().toISOString(),
-              metadata: { prompt_name: promptName, is_system_prompt: true }
+              metadata: { 
+                prompt_name: promptName, 
+                is_system_prompt: true,
+                prompt_type: 'system'
+              }
             });
-          } catch (error) {
-            ErrorHandler.showError(error, `Failed to Load Prompt: ${promptName}`);
           }
+        } catch (error) {
+          console.warn(`Error loading prompt ${promptName}:`, error);
         }
       }
       
-      setMessages(systemPrompts);
-      
-      // Calculate initial context usage for system prompts
-      if (systemPrompts.length > 0) {
-        const totalTokens = systemPrompts.reduce((sum, msg) => sum + (msg.content.length / 4), 0);
-        const maxTokens = 4000; // Default max context window
-        const initialUsage = Math.min((totalTokens / maxTokens) * 100, 100);
-        setContextUsage(initialUsage);
+      if (systemMessages.length > 0) {
+        setMessages(systemMessages);
       }
     } catch (error) {
-      ErrorHandler.showError(error, 'Failed to Load System Prompts');
+      console.error('Error loading system prompts:', error);
     }
   };
 
-  const handleWebSocketMessage = (data: WebSocketResponse) => {
-    if (data.agent_response) {
-      const newMessage: Message = {
-        id: `msg-${Date.now()}`,
+  const handleWebSocketMessage = (data: any) => {
+    console.log('🔍 DEBUG: Frontend received WebSocket message:', data);
+    console.log('🔍 DEBUG: Message type:', data.type, 'Action:', data.action, 'Content:', data.content);
+    // Handle different types of WebSocket messages
+    if (data.type === 'system_message') {
+      // Don't display system messages to the user - they're for internal use only
+      // System messages are used to initialize the agent but shouldn't be shown in the chat
+            console.log('System message received (not displayed):', data.message.content);
+    } else if (data.type === 'seed_message') {
+      const seedMessage: Message = {
+        id: data.message.id || `seed-${Date.now()}`,
         agent_id: agentId,
-        content: data.agent_response.content,
-        message_type: data.agent_response.message_type,
-        timestamp: new Date().toISOString(),
-        metadata: data.agent_response.metadata || {},
-        action: data.agent_response.action,
-        reasoning: data.agent_response.reasoning,
-        tool_name: data.agent_response.tool_name,
-        tool_parameters: data.agent_response.tool_parameters,
-        target_agent_id: data.agent_response.target_agent_id,
+        content: data.message.content,
+        message_type: data.message.message_type,
+        timestamp: data.message.timestamp || new Date().toISOString(),
+        metadata: data.message.metadata || {},
+        action: data.message.action,
+        reasoning: data.message.reasoning,
       };
-      
-      setMessages(prev => [...prev, newMessage]);
-      
-      // Update context usage from backend response
-      if (data.context_usage !== undefined) {
-        setContextUsage(data.context_usage);
-      }
+      setMessages(prev => [...prev, seedMessage]);
+    } else if (data.type === 'agent_response' || data.action === 'CHAT_RESPONSE') {
+      console.log('🔍 DEBUG: Processing agent response, adding to messages');
+      const agentMessage: Message = {
+        id: `agent-${Date.now()}`,
+        agent_id: agentId,
+                  content: data.content,
+                  message_type: data.message_type,
+        timestamp: new Date().toISOString(),
+                  metadata: data.metadata || {},
+                  action: data.action,
+                  reasoning: data.reasoning,
+                  tool_name: data.tool_name,
+                  tool_parameters: data.tool_parameters,
+                  target_agent_id: data.target_agent_id,
+      };
+      setMessages(prev => [...prev, agentMessage]);
+    } else if (data.type === 'connection_established') {
+      notifications.show({
+        title: 'Connected',
+        message: data.message,
+        color: 'green',
+      });
+    } else if (data.type === 'error') {
+      ErrorHandler.showError(new Error(data.error), data.details?.suggestion || 'WebSocket Error');
     }
   };
 
@@ -169,7 +218,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId }) => {
       id: `user-${Date.now()}`,
       agent_id: 'user',
       content: inputMessage,
-      message_type: MessageType.NORMAL_RESPONSE,
+      message_type: MessageType.CHAT_RESPONSE,
       timestamp: new Date().toISOString(),
       metadata: {},
     };
@@ -212,6 +261,12 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId }) => {
         if (response.context_usage !== undefined) {
           setContextUsage(response.context_usage);
         }
+        if (response.tokens_used !== undefined) {
+          setTokensUsed(response.tokens_used);
+        }
+        if (response.context_window !== undefined) {
+          setContextWindow(response.context_window);
+        }
       }
     } catch (error) {
       ErrorHandler.showError(error, 'Failed to Send Message');
@@ -248,7 +303,11 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId }) => {
                 </Text>
               </div>
             </Group>
-            <ContextProgress percentage={contextUsage} />
+            <ContextProgress 
+              percentage={contextUsage} 
+              tokensUsed={tokensUsed}
+              contextWindow={contextWindow}
+            />
           </Group>
         </Box>
 

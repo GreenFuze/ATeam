@@ -2,6 +2,7 @@ import os
 import json
 from typing import Dict, List, Optional, Any
 from pathlib import Path
+from notification_utils import log_error, log_warning, log_info
 
 class SchemaManager:
     """Manages JSON schema files for structured outputs"""
@@ -32,7 +33,7 @@ class SchemaManager:
                         'updated_at': self._get_file_modification_time(file_path)
                     })
         except Exception as e:
-            print(f"Error loading schemas: {e}")
+            raise RuntimeError(f"Error loading schemas from {self.schemas_dir}: {str(e)}")
         
         return schemas
     
@@ -55,7 +56,7 @@ class SchemaManager:
                     'updated_at': self._get_file_modification_time(file_path)
                 }
         except Exception as e:
-            print(f"Error loading schema '{schema_name}': {e}")
+            raise RuntimeError(f"Error loading schema '{schema_name}': {str(e)}")
         
         return None
     
@@ -77,7 +78,7 @@ class SchemaManager:
             
             return schema_name
         except Exception as e:
-            print(f"Error creating schema '{schema_name}': {e}")
+            log_error("SchemaManager", f"Error creating schema '{schema_name}'", e, {"schema_name": schema_name})
             raise
     
     def update_schema(self, schema_name: str, schema_content: Dict[str, Any]) -> None:
@@ -96,7 +97,7 @@ class SchemaManager:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(schema_content, f, indent=2)
         except Exception as e:
-            print(f"Error updating schema '{schema_name}': {e}")
+            log_error("SchemaManager", f"Error updating schema '{schema_name}'", e, {"schema_name": schema_name})
             raise
     
     def delete_schema(self, schema_name: str) -> None:
@@ -109,7 +110,7 @@ class SchemaManager:
             
             file_path.unlink()
         except Exception as e:
-            print(f"Error deleting schema '{schema_name}': {e}")
+            log_error("SchemaManager", f"Error deleting schema '{schema_name}'", e, {"schema_name": schema_name})
             raise
     
     def _read_schema_file(self, file_path: Path) -> Optional[Dict[str, Any]]:
@@ -118,8 +119,9 @@ class SchemaManager:
             with open(file_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"Error reading schema file {file_path}: {e}")
-            return None
+            raise RuntimeError(f"Error reading schema file {file_path}: {str(e)}")
+        
+        return None
     
     def _validate_json_schema(self, schema_content: Dict[str, Any]) -> bool:
         """Basic validation of JSON schema format"""

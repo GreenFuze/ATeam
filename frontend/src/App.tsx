@@ -10,6 +10,7 @@ import AgentsPage from './components/AgentsPage';
 import SettingsPage from './components/SettingsPage';
 import AgentSettingsModal from './components/AgentSettingsModal';
 
+
 // Dark theme configuration
 const theme = createTheme({
   primaryColor: 'blue',

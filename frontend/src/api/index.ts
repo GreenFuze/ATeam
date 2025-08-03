@@ -86,6 +86,14 @@ export const agentsApi = {
       return response.data;
     }, `Failed to Validate Agent: ${id}`);
   },
+
+  getHistory: async (agentId: string, sessionId?: string): Promise<{ agent_id: string; session_id?: string; messages: any[] }> => {
+    return apiCall(async () => {
+      const params = sessionId ? { session_id: sessionId } : {};
+      const response: AxiosResponse<{ agent_id: string; session_id?: string; messages: any[] }> = await api.get(`/agents/${agentId}/history`, { params });
+      return response.data;
+    }, `Failed to Load Agent History: ${agentId}`);
+  },
 };
 
 // Tools API
@@ -270,18 +278,21 @@ export class WebSocketService {
   private listeners: Map<string, (data: any) => void> = new Map();
 
   connect(agentId: string): Promise<void> {
+    console.log('🔍 DEBUG: WebSocketService.connect called for agent:', agentId);
     return new Promise((resolve, reject) => {
       try {
         const wsUrl = `ws://${window.location.host}/ws/chat/${agentId}`;
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {
+          console.log('🔍 DEBUG: WebSocket connection opened');
           console.log('WebSocket connected');
           this.reconnectAttempts = 0;
           resolve();
         };
 
         this.ws.onmessage = (event) => {
+          console.log('🔍 DEBUG: WebSocketService received raw message:', event.data);
           try {
             const data = JSON.parse(event.data);
             this.notifyListeners('message', data);

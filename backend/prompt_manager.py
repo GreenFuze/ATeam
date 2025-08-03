@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Any
 from schemas import PromptConfig, PromptType, SeedMessage, SeedPromptData
 from datetime import datetime
 import json
+from notification_utils import log_error, log_warning, log_info
 
 class PromptManager:
     def __init__(self, prompts_dir: str = "prompts"):
@@ -18,7 +19,7 @@ class PromptManager:
         # Check if prompts directory exists - create it if it doesn't exist
         if not os.path.exists(self.prompts_dir):
             os.makedirs(self.prompts_dir, exist_ok=True)
-            print(f"Created prompts directory: {self.prompts_dir}")
+            log_info("PromptManager", f"Created prompts directory: {self.prompts_dir}", {"prompts_dir": self.prompts_dir})
             return  # Empty prompts directory is OK
         
         # Load metadata from prompts.yaml if it exists
@@ -51,7 +52,7 @@ class PromptManager:
                     self.prompts[prompt_name] = prompt_config
                     
                 except Exception as e:
-                    print(f"Error loading prompt {prompt_name}: {e}")
+                    log_error("PromptManager", f"Error loading prompt {prompt_name}", e, {"prompt_name": prompt_name, "file_path": file_path})
                     raise  # Re-raise the exception to fail fast
     
     def _determine_prompt_type(self, filename: str, content: str) -> PromptType:
@@ -244,8 +245,9 @@ class PromptManager:
                 data = yaml.safe_load(f)
                 return data.get('prompts', {})
         except Exception as e:
-            print(f"Error loading prompts metadata: {e}")
-            return {}
+            raise RuntimeError(f"Error loading prompts metadata from {self.prompts_yaml_path}: {str(e)}")
+        
+        return {}
     
     def _save_prompts_metadata(self, metadata: Dict[str, Dict[str, str]]):
         """Save prompts metadata to prompts.yaml file"""
@@ -258,7 +260,7 @@ class PromptManager:
             with open(self.prompts_yaml_path, 'w', encoding='utf-8') as f:
                 yaml.dump({'prompts': metadata}, f, default_flow_style=False, indent=2)
         except Exception as e:
-            print(f"Error saving prompts metadata: {e}")
+            log_error("PromptManager", "Error saving prompts metadata", e, {"prompts_yaml_path": self.prompts_yaml_path})
             raise
     
     def _update_prompt_metadata(self, prompt_name: str, prompt_type: PromptType):

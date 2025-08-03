@@ -9,3 +9,5 @@ prompts:
     type: system
   toolbuilder_system.md:
     type: system
+  zeus_system.md:
+    type: system

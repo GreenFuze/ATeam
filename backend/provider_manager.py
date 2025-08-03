@@ -2,6 +2,7 @@ import yaml
 import os
 from typing import Dict, List, Optional, Any
 from schemas import ProviderInfo, ProviderInfoView
+from notification_utils import log_error, log_warning, log_info
 
 class ProviderManager:
     def __init__(self, config_path: str = "providers.yaml"):
@@ -12,7 +13,7 @@ class ProviderManager:
     def load_providers(self):
         """Load providers from YAML configuration file"""
         if not os.path.exists(self.config_path):
-            print(f"Warning: Providers configuration file {self.config_path} not found")
+            log_warning("ProviderManager", f"Providers configuration file {self.config_path} not found", {"config_path": self.config_path})
             return
             
         try:
@@ -24,9 +25,9 @@ class ProviderManager:
                             provider_info = ProviderInfo(**provider_data)
                             self.providers[provider_info.name] = provider_info
                         except Exception as e:
-                            print(f"Error loading provider {provider_data.get('name', 'unknown')}: {e}")
+                            raise ValueError(f"Error loading provider {provider_data.get('name', 'unknown')}: {str(e)}")
         except Exception as e:
-            print(f"Error loading providers: {e}")
+            raise RuntimeError(f"Error loading providers from {self.config_path}: {str(e)}")
     
     def save_providers(self):
         """Save providers to YAML configuration file"""
@@ -175,7 +176,7 @@ class ProviderManager:
             print("llm package not available for provider discovery")
             return {}
         except Exception as e:
-            print(f"Error discovering providers: {e}")
+            log_error("ProviderManager", "Error discovering providers", e)
             raise  # Re-raise the exception to not hide problems
     
     def get_all_providers_with_discovery(self) -> List[ProviderInfoView]:
