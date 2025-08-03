@@ -208,8 +208,8 @@ class Agent:
         return LLMResponse(
             content=response.content,
             message_type=MessageType.CHAT_RESPONSE,
-            metadata={
-                "model": self.config.model,
+                metadata={
+                    "model": self.config.model,
                 "agent_id": self.config.id,
                 "action": response.action,
                 "reasoning": response.reasoning

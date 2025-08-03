@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import {
   Box, Text, Group, ActionIcon, Tooltip, Menu, Badge,
-  Paper, Stack, Textarea, Button
+  Paper, Stack, Textarea, Button, Divider, Checkbox
 } from '@mantine/core';
 import {
   IconBrain, IconTool, IconUser, IconMessage,
   IconDotsVertical, IconFileText, IconMarkdown,
-  IconQuestionMark, IconSettings, IconEdit
+  IconQuestionMark, IconSettings, IconEdit,
+  IconCode, IconTools, IconArrowsRightLeft,
+  IconUsers, IconArrowUpRight
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { Message, MessageType } from '../types';
@@ -15,13 +17,13 @@ interface MessageDisplayProps {
   message: Message;
   agentName?: string;
   editable?: boolean;
-  defaultDisplayMode?: 'markdown' | 'text';
+  defaultDisplayMode?: 'markdown' | 'text' | 'raw';
   defaultEditMode?: boolean;
   onSave?: (content: string) => void;
   onCancel?: () => void;
 }
 
-type DisplayMode = 'markdown' | 'text';
+type DisplayMode = 'markdown' | 'text' | 'raw';
 
 const MessageDisplay: React.FC<MessageDisplayProps> = ({ 
   message, 
@@ -36,6 +38,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
   const [showOptions, setShowOptions] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
   const [isEditing, setIsEditing] = useState(editable && defaultEditMode);
+  const [showReasoning, setShowReasoning] = useState(true);
 
   // Update editContent when message content changes
   useEffect(() => {
@@ -54,11 +57,32 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
       case MessageType.SYSTEM:
         return <IconSettings size={16} />;
       case MessageType.CHAT_RESPONSE:
-        return <IconMessage size={16} />;
+        return <IconBrain size={16} />;
       case MessageType.REFINEMENT_RESPONSE:
         return <IconEdit size={16} />;
       default:
         return <IconQuestionMark size={16} />;
+    }
+  };
+
+  const getActionIcon = (action?: string) => {
+    if (!action) return null;
+    
+    switch (action) {
+      case 'CHAT_RESPONSE':
+        return <IconMessage size={14} />;
+      case 'USE_TOOL':
+        return <IconTools size={14} />;
+      case 'AGENT_CALL':
+        return <IconUsers size={14} />;
+      case 'AGENT_DELEGATE':
+        return <IconArrowsRightLeft size={14} />;
+      case 'AGENT_RETURN':
+        return <IconArrowUpRight size={14} />;
+      case 'TOOL_RETURN':
+        return <IconTool size={14} />;
+      default:
+        return <IconQuestionMark size={14} />;
     }
   };
 
@@ -105,8 +129,6 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
     }
   };
 
-
-
   const handleSave = () => {
     if (onSave) {
       onSave(editContent);
@@ -124,6 +146,33 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
 
   const renderMessageContent = () => {
     let content = isEditing ? editContent : message.content;
+
+    if (displayMode === 'raw') {
+      // Show raw JSON for structured messages
+      const rawData = {
+        content: message.content,
+        action: message.action,
+        reasoning: message.reasoning,
+        tool_name: message.tool_name,
+        tool_parameters: message.tool_parameters,
+        target_agent_id: message.target_agent_id,
+        message_type: message.message_type,
+        metadata: message.metadata
+      };
+      return (
+        <Box>
+          <Text size="sm" style={{ 
+            backgroundColor: 'rgba(0,0,0,0.3)', 
+            padding: '8px', 
+            borderRadius: '4px',
+            fontFamily: 'monospace',
+            whiteSpace: 'pre-wrap'
+          }} c="white">
+            {JSON.stringify(rawData, null, 2)}
+          </Text>
+        </Box>
+      );
+    }
 
     // Try to parse JSON content for structured responses
     if (content.startsWith('{') && content.endsWith('}')) {
@@ -199,7 +248,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
   const renderMetadata = () => {
     const metadataItems = [];
 
-    if (message.reasoning) {
+    if (message.reasoning && showReasoning) {
       metadataItems.push(
         <Paper key="reasoning" p="xs" bg="dark.5" withBorder>
           <Text size="xs" fw={600} c="gray.3">Reasoning:</Text>
@@ -225,14 +274,6 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
       metadataItems.push(
         <Paper key="delegation" p="xs" bg="purple.9" withBorder>
           <Text size="xs" fw={600} c="purple.3">Delegating to: {message.target_agent_id}</Text>
-        </Paper>
-      );
-    }
-
-    if (message.action) {
-      metadataItems.push(
-        <Paper key="action" p="xs" bg="green.9" withBorder>
-          <Text size="xs" fw={600} c="green.3">Action: {message.action}</Text>
         </Paper>
       );
     }
@@ -264,15 +305,26 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
     >
       <Group justify="space-between" align="flex-start" mb="sm">
         <Group gap="sm">
-          <Tooltip label={getMessageIconTooltip(message.message_type)}>
-            <Box c={getMessageColor(message.message_type)}>
-              {isUserMessage ? (
-                <IconUser size={20} />
-              ) : (
-                getMessageIcon(message.message_type)
-              )}
-            </Box>
-          </Tooltip>
+          <Group gap="xs">
+            <Tooltip label={isUserMessage ? 'User response' : getMessageIconTooltip(message.message_type)}>
+              <Box c={getMessageColor(message.message_type)}>
+                {isUserMessage ? (
+                  <IconUser size={20} />
+                ) : (
+                  getMessageIcon(message.message_type)
+                )}
+              </Box>
+            </Tooltip>
+            
+            {/* Show action icon for LLM messages */}
+            {!isUserMessage && message.action && (
+              <Tooltip label={`Action: ${message.action}`}>
+                <Box c={getMessageColor(message.message_type)}>
+                  {getActionIcon(message.action)}
+                </Box>
+              </Tooltip>
+            )}
+          </Group>
           
           <div>
             <Text size="sm" fw={600} c="white">
@@ -317,8 +369,29 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
                   >
                     Plain Text
                   </Menu.Item>
+                  <Menu.Item
+                    leftSection={<IconCode size={14} />}
+                    onClick={() => setDisplayMode('raw')}
+                    style={{ 
+                      backgroundColor: displayMode === 'raw' ? 'var(--mantine-color-blue-0)' : 'transparent' 
+                    }}
+                  >
+                    Raw Message
+                  </Menu.Item>
                 </>
               )}
+              
+              <Divider my="xs" />
+              
+              <Menu.Item>
+                <Checkbox
+                  label="Reasoning"
+                  checked={showReasoning}
+                  onChange={(event) => setShowReasoning(event.currentTarget.checked)}
+                  size="xs"
+                />
+              </Menu.Item>
+              
               {editable && !isEditing && (
                 <Menu.Item
                   leftSection={<IconEdit size={14} />}
