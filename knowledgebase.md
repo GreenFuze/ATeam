@@ -58,7 +58,7 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 - **Two-Tab Sidebar**: Agents tab (shows agent list) and Settings tab (Tools, Models, Providers, Prompts, Schemas)
 - **Agent Management**: Full CRUD operations with modal interface and delete confirmation
 - **Chat Interface**: Multiline input with context window progress tracking
-- **Message Display**: Type-specific icons, tooltips, and formatting options with SYSTEM message type support and editable mode
+- **Enhanced Message Display**: Multiple view modes (Markdown, Plain Text, Raw JSON), action-based icons, reasoning toggle, and proper tooltips
 - **Settings Organization**: Properly separated sections for different configuration types
 - **Empty States**: Proper empty states when no data exists
 - **Responsive Design**: Mobile-friendly layout with full-screen utilization
@@ -89,6 +89,7 @@ The ATeam system has undergone a comprehensive refactoring to implement WebSocke
 - **Structured LLM Responses**: All responses follow structured JSON format with Pydantic validation
 - **Custom Tool Integration**: Uses custom tool descriptor and executor instead of `llm` package tool system
 - **Type Safety**: Complete type safety with Pydantic models throughout the system
+- **Enhanced Message Display**: Advanced message display system with multiple view modes and action-based icons
 
 #### Technical Implementation
 - **New Files Created**:
@@ -104,7 +105,7 @@ The ATeam system has undergone a comprehensive refactoring to implement WebSocke
   - `backend/main.py` - WebSocket endpoint updates
   - `frontend/src/types/index.ts` - Updated message types
   - `frontend/src/components/AgentChat.tsx` - New WebSocket flow
-  - `frontend/src/components/MessageDisplay.tsx` - New message types
+  - `frontend/src/components/MessageDisplay.tsx` - Enhanced message display with multiple view modes
 
 #### Message Flow Architecture
 1. **User sends message** → Frontend adds to local state
@@ -153,6 +154,8 @@ The ATeam system has undergone a comprehensive refactoring to implement WebSocke
 6. ✅ **Performance**: No degradation in response times
 7. ✅ **Reliability**: Stable WebSocket connections and message delivery
 8. ✅ **Code Cleanliness**: No unused code, clean imports, no dead paths
+9. ✅ **Enhanced Message Display**: Multiple view modes (Markdown, Plain Text, Raw JSON) with action-based icons
+10. ✅ **User Experience**: Improved message visualization with reasoning toggle and action icons
 
 #### Impact
 - **🚀 Real-time Communication**: WebSocket-based real-time updates
@@ -161,6 +164,8 @@ The ATeam system has undergone a comprehensive refactoring to implement WebSocke
 - **🛡️ Type Safety**: Complete type safety with Pydantic models
 - **🧹 Clean Architecture**: No unused code, proper separation of concerns
 - **⚡ Performance**: Efficient conversation management without LLM package limitations
+- **🎨 Enhanced UI**: Advanced message display with multiple view modes and action-based icons
+- **👥 Better UX**: Improved message visualization with reasoning toggle and proper tooltips
 
 ### ✅ Comprehensive Error Handling Implementation
 The application implements a robust **FAIL-FAST** error handling philosophy throughout all components, ensuring the system never continues running in an invalid state:
@@ -492,7 +497,7 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 7. **Agent Management**: Full CRUD operations with modal interface
 8. **Chat Interface**: Enhanced with multiline input and context tracking
 9. **Settings Organization**: Properly separated configuration sections
-10. **Message Display**: Advanced message rendering with formatting options
+10. **Enhanced Message Display**: Multiple view modes (Markdown, Plain Text, Raw JSON), action-based icons, reasoning toggle, and proper tooltips
 11. **Message Type System**: Complete message type handling with SYSTEM type support
 12. **Dark Mode Messages**: All messages properly styled for dark theme readability
 13. **Agent Deletion**: Delete functionality with confirmation dialog in settings modal
@@ -546,6 +551,11 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 61. **Simplified Dependencies**: No need to pass manager instances around components
 62. **Cleaner Constructors**: Components don't require manager parameters
 63. **No Stale References**: Always get current manager instance via function call
+64. **Enhanced Message Display**: Multiple view modes (Markdown, Plain Text, Raw JSON) with action-based icons and reasoning toggle
+65. **Action-Based Icons**: Secondary icons for LLM messages showing action type (CHAT_RESPONSE, USE_TOOL, etc.)
+66. **Raw Message View**: Complete JSON structure display for debugging and analysis
+67. **Reasoning Toggle**: User-controlled visibility of reasoning boxes in message metadata
+68. **Proper Tooltips**: User messages show "User response" tooltip, LLM messages show action-specific tooltips
 
 ### 🔄 Current State
 - **Application Running**: Server starts successfully on port 8000
@@ -553,7 +563,7 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - **API Working**: All endpoints responding correctly
 - **Agents Available**: 3 pre-configured agents (God, ToolBuilder, Assistant)
 - **All Features Working**: Complete frontend improvements implemented
-- **Message Types**: System messages properly displayed with correct icons
+- **Enhanced Message Display**: Multiple view modes (Markdown, Plain Text, Raw JSON) with action-based icons and reasoning toggle
 - **Dark Mode**: All messages readable with proper contrast and styling
 - **Dynamic Models**: 29 chat models, 8 embedding models discovered
 - **Context Tracking**: Real-time context usage with N/A state for missing context windows
@@ -589,6 +599,12 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - **Simplified Dependencies**: No need to pass manager instances around components
 - **Cleaner Constructors**: Components don't require manager parameters
 - **No Stale References**: Always get current manager instance via function call
+- **WebSocket Communication**: Real-time message delivery with proper error handling and connection management
+- **Custom Conversation Management**: Manual message history management without LLM package conversation object bias
+- **Structured LLM Responses**: Pydantic-based structured response system with type safety and validation
+- **Custom Tool System**: Dynamic tool discovery, description generation, and execution without LLM package bias
+- **Fail-Fast Architecture**: System immediately stops on errors instead of continuing in invalid state
+- **Message Display Enhancements**: Advanced message visualization with multiple view modes and action-based icons
 
 ### 📋 Next Steps
 - Test all new features with real agent interactions
@@ -953,6 +969,8 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 8. **Real-time Communication**: WebSocket-based message flow provides immediate feedback and better user experience
 9. **Separation of Concerns**: Clear boundaries between conversation management, tool execution, and message handling
 10. **Comprehensive Testing**: Validation tests ensure all refactoring changes work correctly and no functionality is broken
+11. **Enhanced Message Display**: Multiple view modes and action-based icons provide better debugging and user experience
+12. **User Experience Design**: Proper tooltips, reasoning toggles, and raw message views improve developer and user experience
 
 ### Development Workflow
 1. **Single Server Approach**: Much simpler than running separate servers with proxying
