@@ -408,6 +408,50 @@ The prompt management system has been significantly enhanced with comprehensive 
 - **Large Modal Support**: Modal can use up to 95% of screen height for extensive content
 - **Content Persistence**: Content properly loads and persists when switching between prompts
 
+### ✅ Agent Management Tools for Zeus Agent (Latest Update)
+The Zeus agent now has comprehensive tools to manage other agents in the ATeam system through a dedicated agent management module.
+
+#### Key Features
+- **Full CRUD Operations**: Create, read, update, and delete agents with complete configuration options
+- **Advanced Search Capabilities**: Search agents by name, description, model, or tools
+- **Agent Validation**: Validate agent configurations and check usability
+- **Detailed Information**: Get comprehensive agent metadata including tool counts and validation status
+- **Robust Error Handling**: All functions handle exceptions gracefully with structured error responses
+- **Type Safety**: Proper type annotations with Union types for functions returning different types
+
+#### Technical Implementation
+- **Tool Functions Created**:
+  - `get_all_agents()` - Retrieves all agents in the system
+  - `get_agent_by_id(agent_id)` - Gets specific agent by unique ID
+  - `get_agent_by_name(name)` - Gets agent by name
+  - `search_agents(query)` - Searches agents by name or description
+  - `create_agent(...)` - Creates new agent with full configuration options
+  - `update_agent(agent_id, ...)` - Updates existing agent configuration
+  - `delete_agent(agent_id)` - Deletes agent from system
+  - `get_agents_by_model(model)` - Finds agents using specific LLM model
+  - `get_agents_by_tool(tool_name)` - Finds agents with specific tool
+  - `validate_agent(agent_id)` - Validates agent configuration
+  - `get_agent_info(agent_id)` - Gets detailed agent information
+
+- **Global Manager Integration**: Uses global manager registry to access agent manager
+- **Fail-Fast Philosophy**: Follows application's error handling approach with immediate exception raising
+- **Structured Responses**: All functions return consistent response formats with success/error indicators
+
+#### Usage by Zeus Agent
+The Zeus agent can now:
+- **List and inspect** all available agents
+- **Create new agents** with specific configurations (name, description, model, prompts, tools, etc.)
+- **Modify existing agents** by updating their settings
+- **Delete agents** that are no longer needed
+- **Search and filter** agents by various criteria
+- **Validate agent configurations** before use
+- **Get detailed information** about agent capabilities and settings
+
+#### Error Handling
+- **Success responses** contain requested data or confirmation messages
+- **Error responses** contain detailed error messages with context
+- **Type safety** ensures proper return type handling throughout
+
 ### ✅ Draggable System Prompts in Agent Settings (August 2025)
 The agent settings dialog has been enhanced with a new draggable system prompts interface:
 
@@ -556,6 +600,7 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 66. **Raw Message View**: Complete JSON structure display for debugging and analysis
 67. **Reasoning Toggle**: User-controlled visibility of reasoning boxes in message metadata
 68. **Proper Tooltips**: User messages show "User response" tooltip, LLM messages show action-specific tooltips
+69. **Agent Management Tools**: Comprehensive tool functions for Zeus agent to manage other agents with full CRUD operations, search capabilities, and validation
 
 ### 🔄 Current State
 - **Application Running**: Server starts successfully on port 8000
@@ -605,6 +650,7 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - **Custom Tool System**: Dynamic tool discovery, description generation, and execution without LLM package bias
 - **Fail-Fast Architecture**: System immediately stops on errors instead of continuing in invalid state
 - **Message Display Enhancements**: Advanced message visualization with multiple view modes and action-based icons
+- **Agent Management Tools**: Zeus agent can now manage other agents with comprehensive CRUD operations and search capabilities
 
 ### 📋 Next Steps
 - Test all new features with real agent interactions

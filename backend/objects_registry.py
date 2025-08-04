@@ -10,6 +10,7 @@ from provider_manager import ProviderManager
 from models_manager import ModelsManager
 from schema_manager import SchemaManager
 from notification_manager import NotificationManager
+from frontend_api import FrontendAPI
 
 # Global manager instances
 _agent_manager: AgentManager | None = None
@@ -19,10 +20,11 @@ _provider_manager: ProviderManager | None = None
 _models_manager: ModelsManager | None = None
 _schema_manager: SchemaManager | None = None
 _notification_manager: NotificationManager | None = None
+_frontend_api: FrontendAPI | None = None
 
 def initialize_managers():
     """Initialize all global manager instances"""
-    global _agent_manager, _tool_manager, _prompt_manager, _provider_manager, _models_manager, _schema_manager, _notification_manager
+    global _agent_manager, _tool_manager, _prompt_manager, _provider_manager, _models_manager, _schema_manager, _notification_manager, _frontend_api
     
     # Initialize managers in dependency order
     _tool_manager = ToolManager("tools")
@@ -32,6 +34,7 @@ def initialize_managers():
     _models_manager = ModelsManager("models.yaml")
     _schema_manager = SchemaManager("schemas")
     _notification_manager = NotificationManager()
+    _frontend_api = FrontendAPI()
 
 def get_agent_manager() -> AgentManager:
     """Get the global agent manager instance"""
@@ -75,6 +78,12 @@ def get_notification_manager() -> NotificationManager:
         raise RuntimeError("Managers not initialized. Call initialize_managers() first.")
     return _notification_manager
 
+def get_frontend_api() -> FrontendAPI:
+    """Get the global frontend API instance"""
+    if _frontend_api is None:
+        raise RuntimeError("Managers not initialized. Call initialize_managers() first.")
+    return _frontend_api
+
 # Convenience aliases for direct use - always get current instances
 agent_manager = get_agent_manager
 tool_manager = get_tool_manager
@@ -82,4 +91,5 @@ prompt_manager = get_prompt_manager
 provider_manager = get_provider_manager
 models_manager = get_models_manager
 schema_manager = get_schema_manager
-notification_manager = get_notification_manager 
+notification_manager = get_notification_manager
+frontend_api = get_frontend_api 

@@ -6,10 +6,10 @@ import {
 import {
   IconMessageCircle, IconSettings, IconBrain
 } from '@tabler/icons-react';
-import { agentsApi } from '../api';
 import { AgentConfig } from '../types';
 import AgentChat from './AgentChat';
 import AgentSettingsModal from './AgentSettingsModal';
+import { connectionManager } from '../services/ConnectionManager';
 
 interface AgentsPageProps {
   onAgentSelect: (agentId: string) => void;
@@ -23,21 +23,29 @@ const AgentsPage: React.FC<AgentsPageProps> = ({ onAgentSelect }) => {
   const [editingAgent, setEditingAgent] = useState<AgentConfig | null>(null);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    // Set up WebSocket handlers for agent updates
+    connectionManager.setFrontendAPIHandlers({
+      onAgentListUpdate: (data: any) => {
+        if (data.agents) {
+          setAgents(data.agents);
+          setLoading(false);
+        }
+      },
+    });
 
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const agentsResponse = await agentsApi.getAll();
-      setAgents(agentsResponse || []);
-    } catch (error) {
-      // Error handling is now done by the API layer
-      console.error('Failed to load data:', error);
-    } finally {
-      setLoading(false);
+    // Load initial data via WebSocket
+    if (connectionManager.isConnected()) {
+      connectionManager.sendGetAgents();
+    } else {
+      // Wait for connection to be established
+      const checkConnection = setInterval(() => {
+        if (connectionManager.isConnected()) {
+          connectionManager.sendGetAgents();
+          clearInterval(checkConnection);
+        }
+      }, 1000);
     }
-  };
+  }, []);
 
   const handleAgentSelect = (agentId: string) => {
     setSelectedAgentId(agentId);
@@ -58,7 +66,8 @@ const AgentsPage: React.FC<AgentsPageProps> = ({ onAgentSelect }) => {
   };
 
   const handleSettingsSuccess = () => {
-    loadData();
+    // Refresh agents list via WebSocket
+    connectionManager.sendGetAgents();
   };
 
   if (loading) {

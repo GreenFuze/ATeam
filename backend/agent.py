@@ -46,7 +46,7 @@ class Agent:
     def _load_prompts(self):
         """Load system prompts and seed messages from prompt manager"""
         # Lazy import to avoid circular dependency
-        from manager_registry import prompt_manager
+        from objects_registry import prompt_manager
         
         # Build system prompt content
         system_prompts: list[str] = []
@@ -75,15 +75,8 @@ class Agent:
         # Store seed messages
         self.seed_messages = seed_messages
     
-
-    def _build_conversation_context(self, user_message: str) -> str:
-        """Build complete conversation context for LLM"""
-        context_parts = []
-        
-        # Add system prompt if exists
-        if self.system_prompt:
-            context_parts.append(f"System: {self.system_prompt}")
-        
+    
+    def _fill_seed_messages(self, context_parts: List[str] = []) -> List[str]:
         # Add seed messages if exist
         for seed_message in self.seed_messages:
             if seed_message.role == "system":
@@ -94,7 +87,11 @@ class Agent:
                 context_parts.append(f"Assistant: {seed_message.content}")
             else:
                 raise ValueError(f"Unknown seed message role: {seed_message.role}")
-        
+            
+        return context_parts
+    
+    
+    def _fill_conversation_history(self, context_parts: List[str] = []) -> List[str]:
         # Add conversation history
         for message in self.messages:
             if message.message_type == MessageType.CHAT_RESPONSE:
@@ -107,6 +104,52 @@ class Agent:
                 context_parts.append(f"Agent Result: {message.content}")
             else:
                 raise ValueError(f"Unknown message type in conversation history: {message.message_type}")
+            
+        return context_parts
+            
+            
+    def _get_tools_prompts(self):
+        from objects_registry import tool_manager
+        
+        # Add available tools information as part of system prompt
+        if self.config.tools:
+            return tool_manager().get_tool_prompt_for_agent(self.config.tools)
+        
+        return None
+                
+    @property
+    def full_system_prompt(self) -> str:
+        """Get complete system prompt including agent description, system prompts, and tools"""
+        prompt_parts = []
+        
+        # Add agent description
+        prompt_parts.append(f"You are {self.config.name}: {self.config.description}")
+        
+        # Add system prompt if exists
+        if self.system_prompt:
+            prompt_parts.append(self.system_prompt)
+        
+        # Add tools information
+        tools_prompts = self._get_tools_prompts()
+        if tools_prompts is not None:
+            prompt_parts.append(tools_prompts)
+        
+        return "\n\n".join(prompt_parts)
+
+    def _build_conversation_context(self, user_message: str) -> str:
+        """Build complete conversation context for LLM"""
+        context_parts = []
+        
+        # Add system prompt (includes agent description, system prompts, and tools)
+        sys_prompt = self.full_system_prompt
+        if sys_prompt != '':
+            context_parts.append(f"System: {sys_prompt}")
+        
+        # Add seed messages
+        context_parts = self._fill_seed_messages(context_parts=context_parts)
+        
+        # Add conversation history
+        context_parts = self._fill_conversation_history(context_parts=context_parts)
         
         # Add current user message
         context_parts.append(f"User: {user_message}")
@@ -334,8 +377,8 @@ class Agent:
             reasoning=response.why
         )
     
-    def get_response(self, message: str) -> LLMResponse:
-        """Get a response from the agent"""
+    async def get_response(self, message: str) -> LLMResponse:
+        """Get a response from the agent and send via FrontendAPI"""
         if not self.model:
             raise RuntimeError(f"Could not initialize model for agent '{self.config.name}'")
         
@@ -351,14 +394,6 @@ class Agent:
         
         # Build complete conversation context
         context = self._build_conversation_context(message)
-        
-        # Add tools information if agent has tools
-        if self.config.tools:
-            # Lazy import to avoid circular dependency
-            from manager_registry import tool_manager
-            tools_prompt = tool_manager().get_tool_prompt_for_agent(self.config.tools)
-            if tools_prompt:
-                context += f"\n\n{tools_prompt}"
         
         # Response format instructions are already included in system prompt during agent initialization
         
@@ -403,6 +438,13 @@ class Agent:
             target_agent_id=llm_response.target_agent_id
         )
         self.messages.append(agent_message)
+        
+        # Send response via FrontendAPI
+        try:
+            from objects_registry import frontend_api
+            await frontend_api().send_agent_response(self.config.id, llm_response)
+        except Exception as e:
+            print(f"Warning: Failed to send response via FrontendAPI: {e}")
         
         return llm_response
     

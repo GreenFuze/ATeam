@@ -1,18 +1,20 @@
 import yaml
 import os
-import uuid
+import random
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import List, Optional, Dict
 
-from schemas import AgentConfig, CreateAgentRequest
+from schemas import AgentConfig
 from agent import Agent
 from notification_utils import log_error, log_warning, log_info
 
 class AgentManager:
     def __init__(self, config_path: str = "agents.yaml"):
         self.config_path = config_path
-        self.agents_config: Dict[str, AgentConfig] = {}
-        self.agent_instances: Dict[str, Agent] = {}  # Lazy-loaded agent instances
+        self.agents_config: dict[str, AgentConfig] = {}
+        self.agent_instances: dict[str, Agent] = {}  # Lazy-loaded agent instances
+        self.session_to_agent: Dict[str, Agent] = {}  # session_id -> agent_instance
+        self.agent_to_sessions: Dict[str, List[str]] = {}  # agent_id -> [session_ids]
         self.load_agents()
         
     def load_agents(self):
@@ -23,10 +25,16 @@ class AgentManager:
             
         with open(self.config_path, 'r', encoding='utf-8') as file:
             data = yaml.safe_load(file)
-            if data and 'agents' in data:
-                for agent_data in data['agents']:
-                    agent = AgentConfig(**agent_data)
-                    self.agents_config[agent.id] = agent
+            
+            if data is None:
+                raise RuntimeError(f'Failed to read (returned None) agents.yaml at: {self.config_path}')
+            
+            if 'agents' not in data:
+                raise RuntimeError(f'Malformed agents.yaml at: {self.config_path}.\nagents.yaml:\n{data}')
+            
+            for agent_data in data['agents']:
+                agent = AgentConfig(**agent_data)
+                self.agents_config[agent.id] = agent
     
     def save_agents(self):
         """Save agents to YAML configuration file"""
@@ -42,12 +50,12 @@ class AgentManager:
         with open(self.config_path, 'w', encoding='utf-8') as file:
             yaml.dump(data, file, default_flow_style=False, indent=2)
     
-    def get_all_agents(self) -> List[Dict[str, Any]]:
-        """Get all agents as dictionaries"""
-        return [agent.model_dump() for agent in self.agents_config.values()]
+    def get_all_agent_configs(self) -> List[AgentConfig]:
+        """Get all agent configurations as AgentConfig objects"""
+        return list(self.agents_config.values())
     
     def get_agent_config(self, agent_id: str) -> AgentConfig:
-        """Get a specific agent by ID"""
+        """Get a specific agent configuration by ID"""
         if agent_id not in self.agents_config:
             raise ValueError(f'Agent {agent_id} not found')
         
@@ -77,46 +85,43 @@ class AgentManager:
         """Clear all cached agent instances"""
         self.agent_instances.clear()
     
-    def create_agent(self, agent_request: CreateAgentRequest) -> str:
-        """Create a new agent"""
-        # Generate unique ID
-        agent_id = str(uuid.uuid4())
+    def add_agent(self, agent_config: AgentConfig) -> None:
+        """Add a new agent with the provided configuration"""
+        # Verify agent ID doesn't already exist
+        if agent_config.id in self.agents_config:
+            raise ValueError(f"Agent with ID '{agent_config.id}' already exists")
         
-        # Create agent configuration
-        agent_data = agent_request.model_dump()
-        agent_data['id'] = agent_id
-        agent_data['created_at'] = datetime.now().isoformat()
-        agent_data['updated_at'] = datetime.now().isoformat()
+        # Set timestamps if not provided
+        if not agent_config.created_at:
+            agent_config.created_at = datetime.now().isoformat()
+        if not agent_config.updated_at:
+            agent_config.updated_at = datetime.now().isoformat()
         
-        agent = AgentConfig(**agent_data)
-        self.agents_config[agent_id] = agent
+        # Add to configuration
+        self.agents_config[agent_config.id] = agent_config
         
         # Save to YAML file
         self.save_agents()
-        
-        return agent_id
     
-    def update_agent(self, agent_id: str, agent_data: Dict[str, Any]):
-        """Update an existing agent"""
-        if agent_id not in self.agents_config:
-            raise ValueError(f"Agent '{agent_id}' not found")
-        
-        # Update agent configuration
-        agent = self.agents_config[agent_id]
-        for key, value in agent_data.items():
-            if hasattr(agent, key) and key not in ['id', 'created_at']:
-                setattr(agent, key, value)
+    def update_agent(self, agent_config: AgentConfig) -> None:
+        """Update an existing agent with the provided configuration"""
+        # Verify agent exists
+        if agent_config.id not in self.agents_config:
+            raise ValueError(f"Agent '{agent_config.id}' not found")
         
         # Update timestamp
-        agent.updated_at = datetime.now().isoformat()
+        agent_config.updated_at = datetime.now().isoformat()
+        
+        # Update configuration
+        self.agents_config[agent_config.id] = agent_config
         
         # Clear cached instance since configuration changed
-        self.clear_agent_instance(agent_id)
+        self.clear_agent_instance(agent_config.id)
         
         # Save to YAML file
         self.save_agents()
     
-    def delete_agent(self, agent_id: str):
+    def delete_agent(self, agent_id: str) -> None:
         """Delete an agent"""
         if agent_id not in self.agents_config:
             raise ValueError(f"Agent '{agent_id}' not found")
@@ -130,7 +135,7 @@ class AgentManager:
         self.save_agents()
     
     def get_agent_by_name(self, name: str) -> Optional[AgentConfig]:
-        """Get an agent by name"""
+        """Get an agent configuration by name"""
         for agent in self.agents_config.values():
             if agent.name == name:
                 return agent
@@ -169,19 +174,61 @@ class AgentManager:
         
         return True
     
-    def get_agent_info(self, agent_id: str) -> Dict[str, Any]:
-        """Get detailed information about an agent"""
-        agent = self.get_agent_config(agent_id)
-        if not agent:
-            return {}
+    def create_agent_session(self, agent_id: str) -> str:
+        """Create a new session for an agent and return session_id"""
+        # Verify agent exists
+        agent_config = self.get_agent_config(agent_id)
         
-        info = agent.model_dump()
+        # Generate session ID: [agent_name]_XXX
+        session_id = f"{agent_config.name}_{random.randint(100, 999)}"
         
-        # Add validation status
-        info['is_valid'] = self.validate_agent(agent_id)
+        # Create agent instance if not exists
+        agent_instance = self.get_agent(agent_id)
         
-        # Add additional metadata
-        info['tool_count'] = len(agent.tools)
-        info['prompt_count'] = len(agent.prompts)
+        # Store session mapping
+        self.session_to_agent[session_id] = agent_instance
         
-        return info 
+        # Track sessions per agent
+        if agent_id not in self.agent_to_sessions:
+            self.agent_to_sessions[agent_id] = []
+        self.agent_to_sessions[agent_id].append(session_id)
+        
+        log_info("AgentManager", f"Created session {session_id} for agent {agent_id}")
+        return session_id
+    
+    def get_agent_by_session(self, session_id: str) -> Agent:
+        """Get agent instance by session ID"""
+        if session_id not in self.session_to_agent:
+            raise ValueError(f"Session '{session_id}' not found")
+        return self.session_to_agent[session_id]
+    
+    def close_session(self, session_id: str) -> None:
+        """Close a session and clean up mappings"""
+        if session_id in self.session_to_agent:
+            agent_instance = self.session_to_agent[session_id]
+            
+            # Find agent_id for this instance
+            agent_id = None
+            for aid, instance in self.agent_instances.items():
+                if instance == agent_instance:
+                    agent_id = aid
+                    break
+            
+            # Remove from mappings
+            del self.session_to_agent[session_id]
+            
+            if agent_id and agent_id in self.agent_to_sessions:
+                if session_id in self.agent_to_sessions[agent_id]:
+                    self.agent_to_sessions[agent_id].remove(session_id)
+                
+                # If no more sessions for this agent, clear the instance
+                if not self.agent_to_sessions[agent_id]:
+                    del self.agent_to_sessions[agent_id]
+                    if agent_id in self.agent_instances:
+                        del self.agent_instances[agent_id]
+            
+            log_info("AgentManager", f"Closed session {session_id}")
+    
+    def get_sessions_for_agent(self, agent_id: str) -> List[str]:
+        """Get all session IDs for a specific agent"""
+        return self.agent_to_sessions.get(agent_id, []) 

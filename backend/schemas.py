@@ -163,18 +163,7 @@ class LLMResponse(BaseModel):
     tool_parameters: Optional[Dict[str, Any]] = None
     target_agent_id: Optional[str] = None
 
-class CreateAgentRequest(BaseModel):
-    name: str
-    description: str
-    model: str
-    prompts: List[str] = []
-    tools: List[str] = []
-    schema_file: Optional[str] = None
-    grammar_file: Optional[str] = None
-    temperature: float = 0.7
-    max_tokens: Optional[int] = None
-    enable_summarization: bool = True
-    enable_scratchpad: bool = True
+
 
 class CreateToolRequest(BaseModel):
     name: str

@@ -2,14 +2,15 @@ import React, { useState, useEffect, useRef } from 'react';
 import { notifications } from '@mantine/notifications';
 import { 
   Container, Stack, Group, Textarea, Button, 
-  ScrollArea, Box, Text
+  ScrollArea, Box, Text, ActionIcon, Tooltip
 } from '@mantine/core';
-import { IconSend, IconBrain } from '@tabler/icons-react';
-import { Message, MessageType, ChatMessageResponse } from '../types';
-import { chatApi, WebSocketService, agentsApi } from '../api';
+import { IconSend, IconBrain, IconRefresh } from '@tabler/icons-react';
+import { Message, MessageType } from '../types';
 import { ErrorHandler } from '../utils/errorHandler';
 import MessageDisplay from './MessageDisplay';
 import ContextProgress from './ContextProgress';
+import { connectionManager } from '../services/ConnectionManager';
+
 
 interface AgentChatProps {
   agentId: string;
@@ -20,36 +21,26 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [wsService, setWsService] = useState<WebSocketService | null>(null);
-  const [contextUsage, setContextUsage] = useState<number | null>(null); // Percentage of context window used
+  const [contextUsage, setContextUsage] = useState<number | null>(null);
   const [tokensUsed, setTokensUsed] = useState<number | null>(null);
   const [contextWindow, setContextWindow] = useState<number | null>(null);
   const [agentInfo, setAgentInfo] = useState<any>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  
-  // Generate a persistent session ID if not provided
-  const [sessionId] = useState(() => propSessionId || `session_${agentId}_${Date.now()}`);
 
   useEffect(() => {
     if (agentId) {
-      initializeWebSocket();
       loadAgentInfo();
     }
-
-    return () => {
-      if (wsService) {
-        wsService.disconnect();
-      }
-    };
   }, [agentId]);
 
   // Load agent history after agentInfo is loaded
   useEffect(() => {
-    if (agentInfo) {
+    if (agentInfo && sessionId) {
       loadAgentHistory();
     }
-  }, [agentInfo]);
+  }, [agentInfo, sessionId]);
 
   useEffect(() => {
     scrollToBottom();
@@ -63,37 +54,121 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
     }
   }, [inputMessage]);
 
-  const initializeWebSocket = async () => {
-    try {
-      const ws = new WebSocketService();
-    console.log('🔍 DEBUG: Frontend WebSocket service created');
-      await ws.connect(agentId);
-      
-      ws.addListener('message', handleWebSocketMessage);
-    console.log('🔍 DEBUG: Frontend WebSocket message listener added');
-      setWsService(ws);
-      
-      notifications.show({
-        title: 'Connected',
-        message: 'Real-time chat connected',
-        color: 'green',
+  // Set up FrontendAPI handlers for this agent
+  useEffect(() => {
+    if (agentId) {
+      connectionManager.setFrontendAPIHandlers({
+        onSystemMessage: (_agentId: string, _sessionId: string, data: any) => {
+          const systemMessage: Message = {
+            id: `system-${Date.now()}`,
+            agent_id: agentId,
+            content: data.content || '',
+            message_type: MessageType.SYSTEM,
+            timestamp: data.timestamp || new Date().toISOString(),
+            metadata: data.metadata || {},
+          };
+          setMessages(prev => [...prev, systemMessage]);
+        },
+        onAgentResponse: (_agentId: string, _sessionId: string, data: any) => {
+          const agentMessage: Message = {
+            id: `agent-${Date.now()}`,
+            agent_id: agentId,
+            content: data.content || '',
+            message_type: data.message_type || MessageType.CHAT_RESPONSE,
+            timestamp: data.timestamp || new Date().toISOString(),
+            metadata: data.metadata || {},
+            action: data.action,
+            reasoning: data.reasoning,
+          };
+          setMessages(prev => [...prev, agentMessage]);
+          setIsLoading(false);
+        },
+        onSeedMessage: (_agentId: string, _sessionId: string, data: any) => {
+          const seedMessage: Message = {
+            id: `seed-${Date.now()}`,
+            agent_id: agentId,
+            content: data.content || '',
+            message_type: data.message_type || MessageType.SYSTEM,
+            timestamp: data.timestamp || new Date().toISOString(),
+            metadata: data.metadata || {},
+          };
+          setMessages(prev => [...prev, seedMessage]);
+        },
+        onError: (_agentId: string, _sessionId: string, error: any) => {
+          ErrorHandler.showError(new Error(error.message || 'Unknown error'), 'WebSocket Error');
+          setIsLoading(false);
+        },
+        onSessionCreated: (receivedAgentId: string, _sessionId: string, data: any) => {
+          if (receivedAgentId === agentId) { // This should be the current agent
+            setSessionId(data.session_id);
+          }
+        },
+        onContextUpdate: (_agentId: string, _sessionId: string, data: any) => {
+          setContextUsage(data.percentage);
+          setTokensUsed(data.tokens_used);
+          setContextWindow(data.context_window);
+        },
+        onAgentListUpdate: (data: any) => {
+          // When agents are updated, try to load the current agent info
+          if (data.agents) {
+            const agent = data.agents.find((a: any) => a.agent_id === agentId);
+            if (agent && !agentInfo) {
+              setAgentInfo(agent);
+            }
+          }
+        },
+        onNotification: (type: string, message: string) => {
+          notifications.show({
+            title: type,
+            message: message,
+            color: 'blue',
+          });
+        },
       });
+
+      // Register this agent for the connection
+      connectionManager.sendRegisterAgent(agentId);
+      
+      // Create session if not provided
+      if (!propSessionId) {
+        createNewSession();
+      } else {
+        setSessionId(propSessionId);
+      }
+    }
+  }, [agentId, propSessionId]);
+
+  const createNewSession = async () => {
+    try {
+      // Show loading state
+      setIsLoading(true);
+      
+      // Send agent refresh to create new session and get system messages
+      // The backend will generate its own session ID
+      connectionManager.sendAgentRefresh(agentId, 'temp_session');
+      
+      // Clear loading state after a short delay to allow for system messages
+      setTimeout(() => {
+        setIsLoading(false);
+      }, 2000);
+      
     } catch (error) {
-      ErrorHandler.showError(error, 'WebSocket Connection Failed');
+      ErrorHandler.showError(error, 'Failed to Create Session');
+      setIsLoading(false);
     }
   };
 
   const loadAgentInfo = async () => {
     try {
-      const response = await fetch(`/api/agents/${agentId}`);
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const error = new Error(`Failed to load agent info: ${response.status} ${response.statusText}`);
-        (error as any).response = { data: errorData, status: response.status, statusText: response.statusText };
-        throw error;
+      // Get agent info from the agents list that was loaded via WebSocket
+      const agents = connectionManager.getAgents();
+      const agent = agents.find(a => a.agent_id === agentId);
+      if (agent) {
+        setAgentInfo(agent);
+      } else {
+        // If not found, request agents via WebSocket and let the handler load it
+        connectionManager.sendGetAgents();
       }
-      const agent = await response.json();
-      setAgentInfo(agent);
     } catch (error) {
       ErrorHandler.showError(error, `Failed to Load Agent: ${agentId}`);
     }
@@ -101,15 +176,11 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
 
   const loadAgentHistory = async () => {
     try {
-      // Load conversation history from agent
-      const history = await agentsApi.getHistory(agentId, sessionId);
+      if (!sessionId) return;
       
-      if (history.messages && history.messages.length > 0) {
-        setMessages(history.messages);
-      } else {
-        // If no conversation history, load system prompts as initial messages
-        await loadSystemPrompts();
-      }
+      // For now, we'll start with an empty conversation
+      // The backend will send seed messages via WebSocket when the session is created
+      setMessages([]);
       
       // Set progress bar to N/A initially - will be updated after first message
       setContextUsage(null);
@@ -120,99 +191,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
     }
   };
 
-  const loadSystemPrompts = async () => {
-    try {
-      if (!agentInfo?.prompts) return;
-      
-      const systemMessages: Message[] = [];
-      
-      for (const promptName of agentInfo.prompts) {
-        try {
-          const response = await fetch(`/api/prompts/${promptName}`);
-          if (!response.ok) {
-            console.warn(`Failed to load prompt ${promptName}: ${response.status}`);
-            continue;
-          }
-          
-          const prompt = await response.json();
-          
-          // Only show system prompts, not seed prompts
-          if (prompt.type === 'system') {
-            systemMessages.push({
-              id: `system-${promptName}`,
-              agent_id: agentId,
-              content: prompt.content,
-              message_type: MessageType.SYSTEM,
-              timestamp: new Date().toISOString(),
-              metadata: { 
-                prompt_name: promptName, 
-                is_system_prompt: true,
-                prompt_type: 'system'
-              }
-            });
-          }
-        } catch (error) {
-          console.warn(`Error loading prompt ${promptName}:`, error);
-        }
-      }
-      
-      if (systemMessages.length > 0) {
-        setMessages(systemMessages);
-      }
-    } catch (error) {
-      console.error('Error loading system prompts:', error);
-    }
-  };
-
-  const handleWebSocketMessage = (data: any) => {
-    console.log('🔍 DEBUG: Frontend received WebSocket message:', data);
-    console.log('🔍 DEBUG: Message type:', data.type, 'Action:', data.action, 'Content:', data.content);
-    // Handle different types of WebSocket messages
-    if (data.type === 'system_message') {
-      // Don't display system messages to the user - they're for internal use only
-      // System messages are used to initialize the agent but shouldn't be shown in the chat
-            console.log('System message received (not displayed):', data.message.content);
-    } else if (data.type === 'seed_message') {
-      const seedMessage: Message = {
-        id: data.message.id || `seed-${Date.now()}`,
-        agent_id: agentId,
-        content: data.message.content,
-        message_type: data.message.message_type,
-        timestamp: data.message.timestamp || new Date().toISOString(),
-        metadata: data.message.metadata || {},
-        action: data.message.action,
-        reasoning: data.message.reasoning,
-      };
-      setMessages(prev => [...prev, seedMessage]);
-    } else if (data.type === 'agent_response' || data.action === 'CHAT_RESPONSE') {
-      console.log('🔍 DEBUG: Processing agent response, adding to messages');
-      const agentMessage: Message = {
-        id: `agent-${Date.now()}`,
-        agent_id: agentId,
-                  content: data.content,
-                  message_type: data.message_type,
-        timestamp: new Date().toISOString(),
-                  metadata: data.metadata || {},
-                  action: data.action,
-                  reasoning: data.reasoning,
-                  tool_name: data.tool_name,
-                  tool_parameters: data.tool_parameters,
-                  target_agent_id: data.target_agent_id,
-      };
-      setMessages(prev => [...prev, agentMessage]);
-    } else if (data.type === 'connection_established') {
-      notifications.show({
-        title: 'Connected',
-        message: data.message,
-        color: 'green',
-      });
-    } else if (data.type === 'error') {
-      ErrorHandler.showError(new Error(data.error), data.details?.suggestion || 'WebSocket Error');
-    }
-  };
-
   const sendMessage = async () => {
-    if (!inputMessage.trim() || isLoading) return;
+    if (!inputMessage.trim() || isLoading || !sessionId) return;
 
     const userMessage: Message = {
       id: `user-${Date.now()}`,
@@ -228,49 +208,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
     setIsLoading(true);
 
     try {
-      if (wsService) {
-        // Send via WebSocket for real-time
-        wsService.sendMessage({
-          content: inputMessage,
-          session_id: sessionId,
-        });
-      } else {
-        // Fallback to REST API
-        const response: ChatMessageResponse = await chatApi.sendMessage(agentId, {
-          content: inputMessage,
-          session_id: sessionId,
-        });
-
-        const agentMessage: Message = {
-          id: `agent-${Date.now()}`,
-          agent_id: agentId,
-          content: response.agent_response.content,
-          message_type: response.agent_response.message_type,
-          timestamp: new Date().toISOString(),
-          metadata: response.agent_response.metadata || {},
-          action: response.agent_response.action,
-          reasoning: response.agent_response.reasoning,
-          tool_name: response.agent_response.tool_name,
-          tool_parameters: response.agent_response.tool_parameters,
-          target_agent_id: response.agent_response.target_agent_id,
-        };
-
-        setMessages(prev => [...prev, agentMessage]);
-        
-        // Update context usage from backend response
-        if (response.context_usage !== undefined) {
-          setContextUsage(response.context_usage);
-        }
-        if (response.tokens_used !== undefined) {
-          setTokensUsed(response.tokens_used);
-        }
-        if (response.context_window !== undefined) {
-          setContextWindow(response.context_window);
-        }
-      }
+      // Send via WebSocket for real-time
+      connectionManager.sendChatMessage(agentId, sessionId, inputMessage);
     } catch (error) {
       ErrorHandler.showError(error, 'Failed to Send Message');
-    } finally {
       setIsLoading(false);
     }
   };
@@ -285,6 +226,31 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  const refreshAgent = async () => {
+    try {
+      if (!sessionId) return;
+      
+      // Send refresh via WebSocket
+      connectionManager.sendAgentRefresh(agentId, sessionId);
+      
+      // Clear messages
+      setMessages([]);
+      setContextUsage(null);
+      setTokensUsed(null);
+      setContextWindow(null);
+      
+      notifications.show({
+        title: 'Agent Refreshed',
+        message: 'Agent instance has been cleared and refreshed',
+        color: 'green',
+      });
+    } catch (error) {
+      ErrorHandler.showError(error, 'Failed to Refresh Agent');
+    }
+  };
+
+
 
   return (
     <Container size="xl" h="100vh" p={0}>
@@ -303,11 +269,23 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
                 </Text>
               </div>
             </Group>
-            <ContextProgress 
-              percentage={contextUsage} 
-              tokensUsed={tokensUsed}
-              contextWindow={contextWindow}
-            />
+            <Group gap="sm">
+              <Tooltip label="Refresh agent instance">
+                <ActionIcon
+                  variant="subtle"
+                  color="blue"
+                  onClick={refreshAgent}
+                  disabled={isLoading}
+                >
+                  <IconRefresh size={18} />
+                </ActionIcon>
+              </Tooltip>
+              <ContextProgress 
+                percentage={contextUsage} 
+                tokensUsed={tokensUsed}
+                contextWindow={contextWindow}
+              />
+            </Group>
           </Group>
         </Box>
 
@@ -350,11 +328,11 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
               minRows={1}
               maxRows={8}
               style={{ flex: 1 }}
-              disabled={isLoading}
+              disabled={isLoading || !connectionManager.isConnected()}
             />
             <Button
               onClick={sendMessage}
-              disabled={!inputMessage.trim() || isLoading}
+              disabled={!inputMessage.trim() || isLoading || !connectionManager.isConnected()}
               leftSection={<IconSend size={16} />}
             >
               Send
@@ -362,6 +340,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
           </Group>
         </Box>
       </Stack>
+
+
     </Container>
   );
 };

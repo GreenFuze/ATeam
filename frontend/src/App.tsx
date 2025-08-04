@@ -9,6 +9,8 @@ import AgentChat from './components/AgentChat';
 import AgentsPage from './components/AgentsPage';
 import SettingsPage from './components/SettingsPage';
 import AgentSettingsModal from './components/AgentSettingsModal';
+import { connectionManager } from './services/ConnectionManager';
+import { notifications } from '@mantine/notifications';
 
 
 // Dark theme configuration
@@ -40,8 +42,60 @@ function App() {
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<any>(null);
+  const [_connectionStatus, setConnectionStatus] = useState({ frontendAPI: false, backendAPI: false, isConnecting: false });
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Initialize global WebSocket connections on app startup
+  useEffect(() => {
+    const initializeConnections = async () => {
+      try {
+        // Set up connection status callbacks
+        connectionManager.setCallbacks({
+          onStatusChange: (status) => {
+            setConnectionStatus(status);
+            console.log('Connection status changed:', status);
+          },
+          onConnectionLost: () => {
+            notifications.show({
+              title: 'Connection Lost',
+              message: 'WebSocket connections have been lost. Attempting to reconnect...',
+              color: 'red',
+            });
+          },
+          onConnectionRestored: () => {
+            notifications.show({
+              title: 'Connected',
+              message: 'WebSocket connections have been restored.',
+              color: 'green',
+            });
+          },
+        });
+
+        // Connect to WebSocket services
+        await connectionManager.connect();
+        console.log('Global WebSocket connections established');
+        
+        // Load initial data via WebSocket
+        connectionManager.sendGetAgents();
+        
+      } catch (error) {
+        console.error('Failed to initialize WebSocket connections:', error);
+        notifications.show({
+          title: 'Connection Error',
+          message: 'Failed to establish WebSocket connections. Some features may not work properly.',
+          color: 'red',
+        });
+      }
+    };
+
+    initializeConnections();
+
+    // Cleanup on unmount
+    return () => {
+      connectionManager.disconnect();
+    };
+  }, []);
 
   // Update selected agent when URL changes
   useEffect(() => {
