@@ -102,6 +102,10 @@ class Agent:
                 context_parts.append(f"Tool Result: {message.content}")
             elif message.message_type == MessageType.AGENT_RETURN:
                 context_parts.append(f"Agent Result: {message.content}")
+            elif message.message_type == MessageType.AGENT_CALL:
+                context_parts.append(f"Agent Call: {message.content}")
+            elif message.message_type == MessageType.AGENT_DELEGATE:
+                context_parts.append(f"Agent Delegate: {message.content}")
             else:
                 raise ValueError(f"Unknown message type in conversation history: {message.message_type}")
             
@@ -132,7 +136,24 @@ class Agent:
         # Add tools information
         tools_prompts = self._get_tools_prompts()
         if tools_prompts is not None:
-            prompt_parts.append(tools_prompts)
+            # Prepend strict action guidance to avoid confusing tools with agents
+            action_policy = (
+                "Tools vs Agents Policy:\n"
+                "- When invoking any of the tools listed below, you MUST use action=\"TOOL_CALL\" and set the 'tool' field to the exact Tool name shown.\n"
+                "- NEVER use AGENT_CALL or AGENT_DELEGATE to run tools.\n"
+                "- Only use AGENT_CALL/AGENT_DELEGATE to interact with other configured agents (by agent name).\n"
+                "- TOOL_CALL format example:\n"
+                "  {\n\t\"action\": \"TOOL_CALL\",\n\t\"reasoning\": \"why\",\n\t\"tool\": \"module.function\",\n\t\"args\": { }\n  }\n"
+            )
+            # List known agents to disambiguate
+            try:
+                from objects_registry import agent_manager
+                other_agents = [a.name for a in agent_manager().get_all_agent_configs()]
+                agents_list = ", ".join(other_agents)
+                action_policy += f"Known agents: {agents_list}\n"
+            except Exception:
+                pass
+            prompt_parts.append(action_policy + "\n" + tools_prompts)
         
         return "\n\n".join(prompt_parts)
 
