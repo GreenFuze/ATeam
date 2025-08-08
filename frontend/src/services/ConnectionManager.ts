@@ -5,6 +5,7 @@
 
 import { frontendAPIService, FrontendAPIHandlers } from './FrontendAPIService';
 import { backendAPIService } from './BackendAPIService';
+import { Message } from '../types';
 
 export interface ConnectionStatus {
   frontendAPI: boolean;
@@ -20,6 +21,7 @@ export interface ConnectionCallbacks {
   onStatusChange?: (status: ConnectionStatus) => void;
   onConnectionLost?: () => void;
   onConnectionRestored?: () => void;
+  onError?: (error: string) => void;
 }
 
 export class ConnectionManager {
@@ -34,6 +36,15 @@ export class ConnectionManager {
     }
   };
   private agents: any[] = [];
+  private models: any[] = [];
+  private prompts: any[] = [];
+  private tools: any[] = [];
+  // Persist session per agent across route navigations (in-memory for SPA lifetime)
+  private sessionsByAgent: Record<string, string> = {};
+  // Cache messages per agent to restore UI on remount
+  private messageCacheByAgent: Record<string, Message[]> = {};
+  // Cache latest context usage per agent
+  private contextByAgent: Record<string, { percentage: number | null; tokensUsed: number | null; contextWindow: number | null }> = {};
 
   constructor() {
     this.setupEventListeners();
@@ -67,6 +78,9 @@ export class ConnectionManager {
       console.error('Error connecting to WebSocket services:', error);
       this.status.isConnecting = false;
       this.updateStatus();
+      if (this.callbacks.onError) {
+        this.callbacks.onError(`Failed to connect to WebSocket services: ${error}`);
+      }
     }
   }
 
@@ -108,14 +122,22 @@ export class ConnectionManager {
   private updateStatus(): void {
     const wasConnected = this.isConnected();
     
+    // Store previous status for comparison
+    const previousStatus = { ...this.status };
+    
     this.status.frontendAPI = frontendAPIService.isConnected();
     this.status.backendAPI = backendAPIService.isConnected();
     this.status.isConnecting = this.status.isConnecting && (!this.status.frontendAPI || !this.status.backendAPI);
 
     const isConnected = this.isConnected();
 
-    // Notify status change
-    if (this.callbacks.onStatusChange) {
+    // Only notify status change if something actually changed
+    const statusChanged = 
+      previousStatus.frontendAPI !== this.status.frontendAPI ||
+      previousStatus.backendAPI !== this.status.backendAPI ||
+      previousStatus.isConnecting !== this.status.isConnecting;
+
+    if (statusChanged && this.callbacks.onStatusChange) {
       this.callbacks.onStatusChange(this.getStatus());
     }
 
@@ -150,11 +172,93 @@ export class ConnectionManager {
   }
 
   public getAgents(): any[] {
+    console.log('🔄 [Frontend] ConnectionManager.getAgents() called. Current agents:', this.agents);
     return [...this.agents];
   }
 
   public updateAgents(agents: any[]): void {
+    console.log('🔄 [Frontend] ConnectionManager.updateAgents() called with:', agents);
     this.agents = agents;
+    console.log('✅ [Frontend] Agents updated in ConnectionManager. Current agents:', this.agents);
+  }
+
+  public updateModels(models: any[]): void {
+    console.log('🔄 [Frontend] ConnectionManager.updateModels() called with:', models);
+    this.models = models;
+    console.log('✅ [Frontend] Models updated in ConnectionManager. Current models:', this.models.length);
+  }
+
+  public updatePrompts(prompts: any[]): void {
+    console.log('🔄 [Frontend] ConnectionManager.updatePrompts() called with:', prompts);
+    this.prompts = prompts;
+    console.log('✅ [Frontend] Prompts updated in ConnectionManager. Current prompts:', this.prompts.length);
+  }
+
+  public updateTools(tools: any[]): void {
+    console.log('🔄 [Frontend] ConnectionManager.updateTools() called with:', tools);
+    this.tools = tools;
+    console.log('✅ [Frontend] Tools updated in ConnectionManager. Current tools:', this.tools.length);
+  }
+
+  public getModels(): any[] {
+    return this.models;
+  }
+
+  public getPrompts(): any[] {
+    return this.prompts;
+  }
+
+  public getTools(): any[] {
+    return this.tools;
+  }
+
+  // Session persistence helpers
+  public setSessionId(agentId: string, sessionId: string): void {
+    this.sessionsByAgent[agentId] = sessionId;
+  }
+
+  public getSessionId(agentId: string): string | null {
+    return this.sessionsByAgent[agentId] || null;
+  }
+
+  public clearSession(agentId: string): void {
+    delete this.sessionsByAgent[agentId];
+    delete this.messageCacheByAgent[agentId];
+    delete this.contextByAgent[agentId];
+  }
+
+  // Message cache helpers (per agent)
+  public appendMessage(agentId: string, message: Message): void {
+    if (!this.messageCacheByAgent[agentId]) {
+      this.messageCacheByAgent[agentId] = [];
+    }
+    this.messageCacheByAgent[agentId].push(message);
+  }
+
+  public getMessages(agentId: string): Message[] {
+    return this.messageCacheByAgent[agentId] ? [...this.messageCacheByAgent[agentId]] : [];
+  }
+
+  public clearMessages(agentId: string): void {
+    this.messageCacheByAgent[agentId] = [];
+  }
+
+  // Context cache helpers
+  public setContext(
+    agentId: string,
+    percentage: number | null,
+    tokensUsed: number | null,
+    contextWindow: number | null
+  ): void {
+    this.contextByAgent[agentId] = { percentage, tokensUsed, contextWindow };
+  }
+
+  public getContext(agentId: string): { percentage: number | null; tokensUsed: number | null; contextWindow: number | null } | null {
+    return this.contextByAgent[agentId] || null;
+  }
+
+  public clearContext(agentId: string): void {
+    delete this.contextByAgent[agentId];
   }
 
   public sendCreateAgent(agentData: any): void {
@@ -187,6 +291,50 @@ export class ConnectionManager {
 
   public sendGetSchemas(): void {
     backendAPIService.sendGetSchemas();
+  }
+
+  public sendUpdateProvider(providerName: string, providerData: any): void {
+    backendAPIService.sendUpdateProvider(providerName, providerData);
+  }
+
+  public sendUpdateModel(modelId: string, modelData: any): void {
+    backendAPIService.sendUpdateModel(modelId, modelData);
+  }
+
+  public sendCreateSchema(schemaData: any): void {
+    backendAPIService.sendCreateSchema(schemaData);
+  }
+
+  public sendUpdateSchema(schemaName: string, schemaData: any): void {
+    backendAPIService.sendUpdateSchema(schemaName, schemaData);
+  }
+
+  public sendDeleteSchema(schemaName: string): void {
+    backendAPIService.sendDeleteSchema(schemaName);
+  }
+
+  public sendUpdatePrompt(promptName: string, promptData: any): void {
+    backendAPIService.sendUpdatePrompt(promptName, promptData);
+  }
+
+  public sendCreatePrompt(promptData: any): void {
+    backendAPIService.sendCreatePrompt(promptData);
+  }
+
+  public sendDeletePrompt(promptName: string): void {
+    backendAPIService.sendDeletePrompt(promptName);
+  }
+
+  public sendGetMonitoringHealth(): void {
+    backendAPIService.sendGetMonitoringHealth();
+  }
+
+  public sendGetMonitoringMetrics(): void {
+    backendAPIService.sendGetMonitoringMetrics();
+  }
+
+  public sendGetMonitoringErrors(): void {
+    backendAPIService.sendGetMonitoringErrors();
   }
 
   public getFrontendAPIConnectionId(): string {

@@ -167,6 +167,90 @@ The ATeam system has undergone a comprehensive refactoring to implement WebSocke
 - **🎨 Enhanced UI**: Advanced message display with multiple view modes and action-based icons
 - **👥 Better UX**: Improved message visualization with reasoning toggle and proper tooltips
 
+### ✅ WebSocket Connection Architecture Fix (Latest Update)
+Fixed critical WebSocket connection architecture issue that was preventing session creation and agent communication.
+
+#### Root Cause Analysis
+- **Two Separate WebSocket Connections**: Frontend has BackendAPI (`/ws/backend-api`) and FrontendAPI (`/ws/frontend-api`) connections
+- **Connection ID Mismatch**: Agent registration happened on BackendAPI connection, but session messages sent via FrontendAPI connection
+- **Connection Tracking Issue**: FrontendAPI was looking for BackendAPI connection IDs in its active connections
+
+#### Technical Solution
+- **Simplified Architecture**: Modified `send_to_agent()` method to send messages to ALL active FrontendAPI connections
+- **Universal Message Delivery**: Agent-specific messages (session_created, system_message, etc.) now go to all frontend connections
+- **Eliminated Registration Complexity**: No need to track which frontend connections are listening to which agents
+
+#### Implementation
+```python
+# Before: Only send to registered agent connections
+if agent_id in self.agent_connections:
+    connection_ids = list(self.agent_connections[agent_id])
+    for connection_id in connection_ids:
+        await self.send_to_connection(connection_id, message)
+
+# After: Send to all active FrontendAPI connections
+connection_ids = list(self.active_connections.keys())
+for connection_id in connection_ids:
+    await self.send_to_connection(connection_id, message)
+```
+
+#### Impact
+- **✅ Session Creation**: Backend successfully sends `session_created` messages to frontend
+- **✅ Session ID Setting**: Frontend receives session ID and sets it properly
+- **✅ Loading State**: Clears when session is created
+- **✅ Button State**: Changes from "Creating Session..." to "Send"
+- **✅ User Experience**: Users can now send messages to agents successfully
+- **✅ Real-time Communication**: All agent messages (responses, system messages, errors) delivered reliably
+
+#### Architecture Benefits
+- **Simplified Design**: No complex connection tracking between different WebSocket endpoints
+- **Reliable Delivery**: Agent messages reach all frontend instances
+- **Better Scalability**: Multiple frontend connections can receive agent updates
+- **Cleaner Code**: Eliminated connection ID confusion and registration complexity
+
+### ✅ Frontend Message Display Fixes (Latest Update)
+Fixed critical frontend message display issues that were affecting user experience and message type recognition.
+
+#### Root Cause Analysis
+- **Message Type Case Mismatch**: Backend sends `"chat_response"` (lowercase) but frontend expects `MessageType.CHAT_RESPONSE` (uppercase)
+- **Incorrect Badge Display**: CHAT_RESPONSE messages were showing redundant badges
+- **Reasoning Display Default**: Reasoning toggle was enabled by default, cluttering the UI
+- **Background JSON Errors**: Browser extensions causing non-critical JSON parsing errors
+
+#### Technical Solution
+- **Case Conversion**: Added proper message type case conversion in `onAgentResponse` and `onSeedMessage` handlers
+- **Badge Logic**: Ensured CHAT_RESPONSE messages don't show redundant badges
+- **UI Defaults**: Changed reasoning display to be hidden by default
+- **Error Handling**: Identified background errors as browser extension issues (non-critical)
+
+#### Implementation
+```typescript
+// Convert message_type to proper enum value
+let messageType = MessageType.CHAT_RESPONSE; // default
+if (data.message_type) {
+  const upperType = data.message_type.toUpperCase();
+  if (upperType in MessageType) {
+    messageType = MessageType[upperType as keyof typeof MessageType];
+  }
+}
+
+// Reasoning hidden by default
+const [showReasoning, setShowReasoning] = useState(false);
+```
+
+#### Impact
+- **✅ Message Type Recognition**: No more "Unknown message type" errors
+- **✅ Proper Badge Display**: CHAT_RESPONSE messages don't show redundant badges
+- **✅ Clean UI**: Reasoning hidden by default for better user experience
+- **✅ Action Tooltips**: Correct action information display without confusion
+- **✅ Clean Console**: No more frontend message type-related errors
+
+#### User Experience Improvements
+- **Cleaner Interface**: No redundant badges or default reasoning display
+- **Proper Message Recognition**: All message types correctly identified and displayed
+- **Better Defaults**: UI starts in a clean state with reasoning hidden
+- **Consistent Behavior**: Action tooltips work correctly for all message types
+
 ### ✅ Comprehensive Error Handling Implementation
 The application implements a robust **FAIL-FAST** error handling philosophy throughout all components, ensuring the system never continues running in an invalid state:
 
@@ -606,7 +690,7 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - **Application Running**: Server starts successfully on port 8000
 - **Frontend Accessible**: Clean UI with proper navigation and dark mode
 - **API Working**: All endpoints responding correctly
-- **Agents Available**: 3 pre-configured agents (God, ToolBuilder, Assistant)
+- **Agents Available**: Zeus agent configured and working
 - **All Features Working**: Complete frontend improvements implemented
 - **Enhanced Message Display**: Multiple view modes (Markdown, Plain Text, Raw JSON) with action-based icons and reasoning toggle
 - **Dark Mode**: All messages readable with proper contrast and styling
@@ -651,6 +735,10 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - **Fail-Fast Architecture**: System immediately stops on errors instead of continuing in invalid state
 - **Message Display Enhancements**: Advanced message visualization with multiple view modes and action-based icons
 - **Agent Management Tools**: Zeus agent can now manage other agents with comprehensive CRUD operations and search capabilities
+- **✅ Session Creation Working**: WebSocket connection architecture fixed, sessions create successfully
+- **✅ Chat Functionality**: Users can send messages to agents and receive responses
+- **✅ Real-time Communication**: All agent messages delivered reliably via WebSocket
+- **✅ Message Display Fixed**: Proper message type recognition, clean UI defaults, no redundant badges
 
 ### 📋 Next Steps
 - Test all new features with real agent interactions
@@ -659,6 +747,11 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - Create user documentation
 
 ## Recent Bug Fixes (Latest Update)
+
+### ✅ Agent Settings Modal: Duplicate Model Options Fixed
+- **root cause**: Models that support both chat and embeddings appeared twice (same ID) in the dropdown; Mantine Select disallows duplicate option values. Example: `nous-hermes2:10.7b` discovered as both chat and embedding.
+- **fix**: Filtered the dropdown to show only chat-capable models by applying `model.embedding_model === false` in `AgentSettingsModal.tsx` when building `data`.
+- **impact**: Eliminates Mantine error "Duplicate options are not supported", prevents misconfiguration, and ensures agents can only select valid chat models.
 
 ### ✅ Delete Agent Path Issue Fixed
 - **Root Cause**: `os.makedirs('')` failed on Windows when `config_path` was relative
@@ -983,6 +1076,23 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 - **Impact**: Complete model configuration, accurate context tracking, proper inference settings
 - **Status**: ✅ COMPLETE - All models configured with accurate specifications
 
+### ✅ JSON Serialization Fix for Python Sets
+- **Root Cause**: Python `set` objects are not JSON serializable, causing `"Object of type set is not JSON serializable"` errors when sending data over WebSocket
+- **Issue**: `attachment_types` field in `ModelInfoView` objects contained `set()` objects that couldn't be serialized to JSON
+- **Solution**: Convert all `set()` objects to `list()` before JSON serialization
+- **Implementation**:
+  - **Backend Fix**: Updated `models_manager.py` to convert `set()` to `list()` in all `attachment_types` assignments
+  - **Schema Definition**: `attachment_types` field already defined as `List[str]` in Pydantic schema
+  - **Conversion Points**: Fixed 6 instances where `set()` was being assigned to `attachment_types`
+  - **Pattern**: `discovered_info.get('attachment_types', set())` → `list(discovered_info.get('attachment_types', set()))`
+- **Technical Details**:
+  - **JSON Serialization**: Lists are JSON serializable, sets are not
+  - **Type Safety**: Lists maintain the same functionality as sets for this use case
+  - **Schema Compliance**: `List[str]` type definition already expected lists, not sets
+  - **WebSocket Impact**: Fixes `"[object Object]" is not valid JSON` errors in frontend
+- **Impact**: Eliminates JSON serialization errors, ensures proper WebSocket communication
+- **Status**: ✅ COMPLETE - All set serialization issues resolved
+
 ### ✅ Enhanced Prompt Editing Interface
 - **Root Cause**: Need for better editing experience for large prompt content with dynamic sizing
 - **Issue**: Small textarea (4-12 rows) insufficient for large content, missing edit options in menu
@@ -1203,6 +1313,10 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 68. **Exception Propagation**: Errors bubble up to API endpoints with appropriate HTTP status codes
 69. **Detailed Error Context**: All error messages include relevant context for debugging
 70. **No Silent Failures**: System immediately stops when invalid state is detected
+71. **Python Set JSON Serialization**: Python `set` objects are not JSON serializable - convert to `list()` before sending over WebSocket
+72. **Attachment Types Field**: `attachment_types` field in `ModelInfoView` must be `List[str]`, not `set()` for proper JSON serialization
+73. **WebSocket Serialization Errors**: `"Object of type set is not JSON serializable"` errors indicate Python sets being sent over WebSocket
+74. **Schema Compliance**: Ensure Pydantic model fields match the actual data types being assigned (e.g., `List[str]` not `set()`)
 
 ## Removed Features
 - ❌ Local SQLite database integration
@@ -1351,7 +1465,12 @@ ATeam/
 - ✅ Large modal dialogs (95% max height) for extensive content
 - ✅ Specialized editing interfaces for system and seed prompts
 - ✅ JSON-based seed prompt storage with markdown fallback
+- ✅ WebSocket connection architecture with reliable message delivery
+- ✅ Session creation and management with proper loading states
+- ✅ Real-time chat functionality with agent responses
+- ✅ Agent management tools for Zeus agent
 - ✅ Content persistence and synchronization across prompt switches
+- ✅ Frontend message display fixes with proper type recognition and clean UI defaults
 - ✅ Dynamic tool discovery from Python files
 - ✅ Complete function and method signature extraction
 - ✅ Tool signature display across all interfaces

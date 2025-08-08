@@ -14,7 +14,15 @@ interface SeedPromptEditorProps {
 }
 
 const SeedPromptEditor: React.FC<SeedPromptEditorProps> = ({ value, onChange }) => {
-  const [messages, setMessages] = useState<SeedMessage[]>(value.messages || []);
+  // Assert that value is properly structured - if not, there's a backend bug
+  if (!value) {
+    throw new Error('Backend sent undefined value for SeedPromptEditor - this indicates a backend bug');
+  }
+  if (!value.messages) {
+    throw new Error('Backend sent malformed SeedPromptEditor value - missing messages array - this indicates a backend bug');
+  }
+  
+  const [messages, setMessages] = useState<SeedMessage[]>(value.messages);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   useEffect(() => {

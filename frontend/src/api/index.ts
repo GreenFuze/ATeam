@@ -301,9 +301,12 @@ export class WebSocketService {
           }
         };
 
-        this.ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          const wsError = new Error(`WebSocket connection failed for agent ${agentId}`);
+        this.ws.onerror = (event) => {
+          // Extract meaningful error information from WebSocket Event
+          const target = event.target as WebSocket;
+          const errorMsg = target ? `WebSocket connection failed for agent ${agentId} (${target.url})` : `WebSocket connection failed for agent ${agentId}`;
+          console.error('WebSocket error:', { event, target, readyState: target?.readyState });
+          const wsError = new Error(errorMsg);
           reject(wsError);
         };
 

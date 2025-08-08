@@ -38,7 +38,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
   const [showOptions, setShowOptions] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
   const [isEditing, setIsEditing] = useState(editable && defaultEditMode);
-  const [showReasoning, setShowReasoning] = useState(true);
+  const [showReasoning, setShowReasoning] = useState(false);
 
   // Update editContent when message content changes
   useEffect(() => {
@@ -178,7 +178,11 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
     if (content.startsWith('{') && content.endsWith('}')) {
       try {
         const parsed = JSON.parse(content);
-        content = parsed.content || content;
+        // Assert that parsed content is properly structured - if not, there's a backend bug
+        if (!parsed.content) {
+          throw new Error('Backend sent malformed JSON content - missing content field - this indicates a backend bug');
+        }
+        content = parsed.content;
       } catch (e) {
         // If parsing fails, use original content
       }
@@ -328,10 +332,11 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
           
           <div>
             <Text size="sm" fw={600} c="white">
-              {isUserMessage ? 'You' : (agentName || `Agent ${message.agent_id}`)}
+              {isUserMessage ? 'You' : (agentName || `Agent ${message.agent_id || 'Unknown'}`)}
             </Text>
           </div>
 
+          {/* Only show badge for non-CHAT_RESPONSE messages */}
           {message.message_type !== MessageType.CHAT_RESPONSE && (
             <Badge size="xs" variant="light" color={getMessageColor(message.message_type)}>
               {message.message_type.replace('_', ' ')}

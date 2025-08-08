@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Container, Title, Card, Text, Group, Button, Badge,
@@ -10,10 +10,10 @@ import {
   IconDatabase, IconEye, IconAlertTriangle, IconCode, IconEdit,
   IconChevronDown, IconChevronRight
 } from '@tabler/icons-react';
-import { toolsApi, promptsApi, modelsApi, schemasApi } from '../api';
 import { ToolConfig, PromptConfig } from '../types';
 import { ErrorHandler } from '../utils/errorHandler';
 import PromptEditor from './PromptEditor';
+import { connectionManager } from '../services/ConnectionManager';
 
 const SettingsPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -138,49 +138,91 @@ const SettingsPage: React.FC = () => {
     return <Stack gap="md">{fields}</Stack>;
   };
 
-  React.useEffect(() => {
-    loadData();
-  }, []);
+  // Set up WebSocket handlers and load data
+  useEffect(() => {
+    // Set up WebSocket handlers for data updates
+    connectionManager.setFrontendAPIHandlers({
+      onToolUpdate: (data: any) => {
+        console.log('Received tool update:', data);
+        
+        // Assert that data is properly structured - if not, there's a backend bug
+        if (!data) {
+          throw new Error('Backend sent undefined data for tool_update - this indicates a backend bug');
+        }
+        if (!data.tools) {
+          throw new Error('Backend sent malformed tool_update data - missing tools array - this indicates a backend bug');
+        }
+        
+        setTools(data.tools);
+        setToolsDirectoryPath(data.tools_directory_path || '');
+        setLoading(false);
+      },
+      onPromptUpdate: (data: any) => {
+        console.log('Received prompt update:', data);
+        
+        // Assert that data is properly structured - if not, there's a backend bug
+        if (!data) {
+          throw new Error('Backend sent undefined data for prompt_update - this indicates a backend bug');
+        }
+        if (!data.prompts) {
+          throw new Error('Backend sent malformed prompt_update data - missing prompts array - this indicates a backend bug');
+        }
+        
+        setPrompts(data.prompts);
+        setLoading(false);
+      },
+      onProviderUpdate: (data: any) => {
+        console.log('Received provider update:', data);
+        
+        // Assert that data is properly structured - if not, there's a backend bug
+        if (!data) {
+          throw new Error('Backend sent undefined data for provider_update - this indicates a backend bug');
+        }
+        if (!data.providers) {
+          throw new Error('Backend sent malformed provider_update data - missing providers array - this indicates a backend bug');
+        }
+        
+        setProviders(data.providers);
+        setLoading(false);
+      },
+      onModelUpdate: (data: any) => {
+        console.log('Received model update:', data);
+        
+        // Assert that data is properly structured - if not, there's a backend bug
+        if (!data) {
+          throw new Error('Backend sent undefined data for model_update - this indicates a backend bug');
+        }
+        if (!data.models) {
+          throw new Error('Backend sent malformed model_update data - missing models array - this indicates a backend bug');
+        }
+        
+        setModels(data.models);
+        setLoading(false);
+      },
+      onSchemaUpdate: (data: any) => {
+        console.log('Received schema update:', data);
+        
+        // Assert that data is properly structured - if not, there's a backend bug
+        if (!data) {
+          throw new Error('Backend sent undefined data for schema_update - this indicates a backend bug');
+        }
+        if (!data.schemas) {
+          throw new Error('Backend sent malformed schema_update data - missing schemas array - this indicates a backend bug');
+        }
+        
+        setSchemas(data.schemas);
+        setLoading(false);
+      },
+    });
 
-  const loadData = async () => {
+    // Load initial data via WebSocket
     setLoading(true);
-    try {
-      // Load tools
-      const toolsResponse = await toolsApi.getAll();
-      setTools(toolsResponse || []);
-      
-      // Load tools directory path
-      const toolsPathResponse = await toolsApi.getDirectoryPath();
-      setToolsDirectoryPath(toolsPathResponse);
-
-      // Load prompts
-      const promptsResponse = await promptsApi.getAll();
-      setPrompts(promptsResponse || []);
-
-      // Load providers
-      const providersResponse = await fetch('/api/providers');
-      if (!providersResponse.ok) {
-        const errorData = await providersResponse.json().catch(() => ({}));
-        const error = new Error(`Failed to load providers: ${providersResponse.status} ${providersResponse.statusText}`);
-        (error as any).response = { data: errorData, status: providersResponse.status, statusText: providersResponse.statusText };
-        throw error;
-      }
-      const providersData = await providersResponse.json();
-      setProviders(providersData.providers || []);
-
-      // Load models
-      const modelsResponse = await modelsApi.getAll();
-      setModels(modelsResponse || []);
-
-      // Load schemas
-      const schemasResponse = await schemasApi.getAll();
-      setSchemas(schemasResponse || []);
-    } catch (error) {
-      ErrorHandler.showError(error, 'Failed to Load Settings Data');
-    } finally {
-      setLoading(false);
-    }
-  };
+    connectionManager.sendGetTools();
+    connectionManager.sendGetPrompts();
+    connectionManager.sendGetProviders();
+    connectionManager.sendGetModels();
+    connectionManager.sendGetSchemas();
+  }, []);
 
 
 
@@ -205,25 +247,15 @@ const SettingsPage: React.FC = () => {
     if (!selectedProvider) return;
     
     try {
-      const response = await fetch(`/api/providers/${selectedProvider.name}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(editProviderForm),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const error = new Error(`Failed to update provider: ${response.status} ${response.statusText}`);
-        (error as any).response = { data: errorData, status: response.status, statusText: response.statusText };
-        throw error;
-      }
-
+      // Send provider update via WebSocket
+      connectionManager.sendUpdateProvider(selectedProvider.name, editProviderForm);
+      
       setEditProviderModal(false);
       setSelectedProvider(null);
       setEditProviderForm({ api_key_required: false, api_key_env_var: '', base_url: '' });
-      loadData();
+      
+      // Refresh providers list
+      connectionManager.sendGetProviders();
     } catch (error) {
       ErrorHandler.showError(error, 'Failed to Update Provider');
     }
@@ -231,6 +263,11 @@ const SettingsPage: React.FC = () => {
 
   const openEditProviderModal = (provider: any) => {
     setSelectedProvider(provider);
+    // Assert that provider is properly structured - if not, there's a backend bug
+    if (!provider) {
+      throw new Error('Backend sent undefined provider data - this indicates a backend bug');
+    }
+    
     setEditProviderForm({
       api_key_required: provider.api_key_required || false,
       api_key_env_var: provider.api_key_env_var || '',
@@ -251,6 +288,14 @@ const SettingsPage: React.FC = () => {
       setModelOptions(null);
     }
     
+    // Assert that model is properly structured - if not, there's a backend bug
+    if (!model) {
+      throw new Error('Backend sent undefined model data - this indicates a backend bug');
+    }
+    if (!model.name) {
+      throw new Error('Backend sent malformed model data - missing name - this indicates a backend bug');
+    }
+    
     // Initialize default_inference with stream=true for models that support streaming
     const defaultInference = model.default_inference || {};
     if (model.can_stream && defaultInference.stream === undefined) {
@@ -258,7 +303,7 @@ const SettingsPage: React.FC = () => {
     }
     
     setEditModelForm({
-      name: model.name || '',
+      name: model.name,
       description: model.description || '',
       context_window_size: model.context_window_size || null,
       model_settings: model.model_settings || {},
@@ -271,10 +316,14 @@ const SettingsPage: React.FC = () => {
     if (!selectedModel) return;
     
     try {
-      await modelsApi.update(selectedModel.id, editModelForm);
-      await loadData();
+      // Send model update via WebSocket
+      connectionManager.sendUpdateModel(selectedModel.id, editModelForm);
+      
       setEditModelModal(false);
       setSelectedModel(null);
+      
+      // Refresh models list
+      connectionManager.sendGetModels();
     } catch (error) {
       ErrorHandler.showError(error, 'Failed to Update Model');
     }
@@ -296,8 +345,11 @@ const SettingsPage: React.FC = () => {
 
   const handleDeleteSchema = async (schemaName: string) => {
     try {
-      await schemasApi.delete(schemaName);
-      loadData();
+      // Send schema delete via WebSocket
+      connectionManager.sendDeleteSchema(schemaName);
+      
+      // Refresh schemas list
+      connectionManager.sendGetSchemas();
     } catch (error) {
       ErrorHandler.showError(error, 'Failed to Delete Schema');
     }
@@ -306,10 +358,14 @@ const SettingsPage: React.FC = () => {
   const handleCreateSchema = async () => {
     try {
       const schemaContent = JSON.parse(newSchema.content);
-      await schemasApi.create({ name: newSchema.name, content: schemaContent });
+      // Send schema create via WebSocket
+      connectionManager.sendCreateSchema({ name: newSchema.name, content: schemaContent });
+      
       setCreateSchemaModal(false);
       setNewSchema({ name: '', content: '' });
-      loadData();
+      
+      // Refresh schemas list
+      connectionManager.sendGetSchemas();
     } catch (error) {
       ErrorHandler.showError(error, 'Failed to Create Schema');
     }
@@ -318,10 +374,14 @@ const SettingsPage: React.FC = () => {
   const handleEditSchema = async () => {
     try {
       const schemaContent = JSON.parse(editSchemaForm.content);
-      await schemasApi.update(editSchemaForm.name, { content: schemaContent });
+      // Send schema update via WebSocket
+      connectionManager.sendUpdateSchema(editSchemaForm.name, { content: schemaContent });
+      
       setEditSchemaModal(false);
       setEditSchemaForm({ name: '', content: '' });
-      loadData();
+      
+      // Refresh schemas list
+      connectionManager.sendGetSchemas();
     } catch (error) {
       ErrorHandler.showError(error, 'Failed to Update Schema');
     }
@@ -853,23 +913,30 @@ const SettingsPage: React.FC = () => {
         onSave={async (promptData) => {
           try {
             if (selectedPrompt) {
-              await promptsApi.update(selectedPrompt.name, promptData.content, promptData.name, promptData.type);
+              // Send prompt update via WebSocket
+              connectionManager.sendUpdatePrompt(selectedPrompt.name, promptData);
             } else {
-              await promptsApi.create(promptData);
+              // Send prompt create via WebSocket
+              connectionManager.sendCreatePrompt(promptData);
             }
             setEditPromptModal(false);
             setSelectedPrompt(null);
-            loadData();
+            
+            // Refresh prompts list
+            connectionManager.sendGetPrompts();
           } catch (error) {
             console.error('Error saving prompt:', error);
           }
         }}
         onDelete={async (promptName) => {
           try {
-            await promptsApi.delete(promptName);
+            // Send prompt delete via WebSocket
+            connectionManager.sendDeletePrompt(promptName);
             setEditPromptModal(false);
             setSelectedPrompt(null);
-            loadData();
+            
+            // Refresh prompts list
+            connectionManager.sendGetPrompts();
           } catch (error) {
             console.error('Error deleting prompt:', error);
           }

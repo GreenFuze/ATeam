@@ -90,7 +90,7 @@ class NotificationManager:
             type=NotificationType.ERROR,
             title=title,
             message=message,
-            details=str(exception) if exception else None,
+            details=exception.__str__() if exception else None,
             stack_trace=traceback.format_exc() if exception else None,
             context=context
         )

@@ -252,7 +252,7 @@ class ModelInfoView(BaseModel):
     
     # Badge attributes
     vision: bool = False
-    attachment_types: set = set()
+    attachment_types: List[str] = Field(default_factory=list)
     dimensions: Optional[int] = None
     truncate: bool = False
     supports_binary: bool = False

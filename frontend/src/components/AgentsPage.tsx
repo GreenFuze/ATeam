@@ -25,11 +25,17 @@ const AgentsPage: React.FC<AgentsPageProps> = ({ onAgentSelect }) => {
   useEffect(() => {
     // Set up WebSocket handlers for agent updates
     connectionManager.setFrontendAPIHandlers({
-      onAgentListUpdate: (data: any) => {
-        if (data.agents) {
-          setAgents(data.agents);
-          setLoading(false);
+      onAgentListUpdateAgentsPage: (data: any) => {
+        // Assert that data is properly structured - if not, there's a backend bug
+        if (!data) {
+          throw new Error('Backend sent undefined data for agent_list_update - this indicates a backend bug');
         }
+        if (!data.agents) {
+          throw new Error('Backend sent malformed agent_list_update data - missing agents array - this indicates a backend bug');
+        }
+        
+        setAgents(data.agents);
+        setLoading(false);
       },
     });
 

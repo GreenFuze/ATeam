@@ -70,9 +70,14 @@ async def frontend_api_websocket(websocket: WebSocket):
     connection_id = f"frontend_{uuid.uuid4().hex}"
     try:
         await frontend_api().connect(websocket, connection_id)
-        # Keep connection alive to receive messages
+        # Keep connection alive - FrontendAPI is for backend-to-frontend communication only
+        # No messages are expected from frontend on this connection
         while websocket.client_state != WebSocketState.DISCONNECTED:
-            await websocket.receive_text()
+            try:
+                # Just keep the connection alive
+                await asyncio.sleep(1)
+            except Exception:
+                break
     except WebSocketDisconnect:
         frontend_api().disconnect(connection_id)
     except Exception as e:
@@ -93,10 +98,10 @@ async def backend_api_websocket(websocket: WebSocket):
         backend_api.disconnect(connection_id)
 
 # Static file serving for production
-if os.path.exists("../frontend/dist"):
+if os.path.exists("./static/index.html"):
     print("🚀 Running in PRODUCTION mode - serving built static files")
-    app.mount("/assets", StaticFiles(directory="../frontend/dist/assets"), name="assets")
-    
+    app.mount("/assets", StaticFiles(directory="./static/assets"), name="assets")
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
         """Serve the Single Page Application"""
@@ -113,7 +118,7 @@ if os.path.exists("../frontend/dist"):
             raise HTTPException(status_code=404, detail="Asset not found")
         
         # Serve index.html for all other routes (SPA routing)
-        index_path = "../frontend/dist/index.html"
+        index_path = "./static/index.html"
         if os.path.exists(index_path):
             return FileResponse(index_path)
         else:
@@ -129,7 +134,7 @@ async def global_exception_handler(request, exc):
     error_detail = {
         "error": "Internal server error",
         "exception_type": type(exc).__name__,
-        "exception_message": str(exc),
+        "exception_message": exc.__str__(),
         "exception_traceback": traceback.format_exc(),
         "suggestion": "Check server logs for more details"
     }

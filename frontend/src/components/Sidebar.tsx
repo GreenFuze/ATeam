@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Text, Stack, NavLink, Group, ActionIcon, Tooltip,
@@ -18,6 +18,7 @@ import {
   IconBell,
   IconAlertCircle
 } from '@tabler/icons-react';
+import { connectionManager } from '../services/ConnectionManager';
 
 interface SidebarProps {
   onAgentSelect: (agentId: string) => void;
@@ -42,48 +43,41 @@ const Sidebar: React.FC<SidebarProps> = ({
   const [checkingHealth, setCheckingHealth] = useState(false);
 
   // Load agents when component mounts
-  React.useEffect(() => {
-    loadAgents();
-    checkSystemHealth();
-  }, []);
-
-  const loadAgents = async () => {
-    setLoading(true);
-    try {
-      const response = await fetch('/api/agents');
-      const data = await response.json();
-      setAgents(data.agents || []);
-    } catch (error) {
-      console.error('Failed to load agents:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleNavigation = (path: string) => {
-    navigate(path);
-  };
-
-  const handleAgentSelect = (agentId: string) => {
-    onAgentSelect(agentId);
-    setActiveTab('agents');
-  };
-
-  const handleAgentSettings = (agentId: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    onAgentSettings(agentId);
-  };
-
-  const checkSystemHealth = async () => {
-    setCheckingHealth(true);
-    try {
-      const newNotifications: any[] = [];
-      
-      // Check providers
-      const providersResponse = await fetch('/api/providers');
-      if (providersResponse.ok) {
-        const providersData = await providersResponse.json();
-        const providers = providersData.providers || [];
+  useEffect(() => {
+    console.log('🔄 [Frontend] Sidebar useEffect() called - setting up WebSocket handlers');
+    
+    // Set up WebSocket handlers for agent updates and provider updates
+    connectionManager.setFrontendAPIHandlers({
+      onAgentListUpdateSidebar: (data) => {
+        console.log('📥 [Frontend] Sidebar received agent list update:', data);
+        
+        // Assert that data is properly structured - if not, there's a backend bug
+        if (!data) {
+          throw new Error('Backend sent undefined data for agent_list_update - this indicates a backend bug');
+        }
+        if (!data.agents) {
+          throw new Error('Backend sent malformed agent_list_update data - missing agents array - this indicates a backend bug');
+        }
+        
+        const agents = data.agents;
+        console.log('📥 [Frontend] Sidebar setting agents:', agents);
+        setAgents(agents);
+        setLoading(false);
+        console.log('✅ [Frontend] Sidebar agents updated, loading set to false');
+      },
+      onProviderUpdate: (data) => {
+        console.log('📥 [Frontend] Sidebar received provider update:', data);
+        
+        // Assert that data is properly structured - if not, there's a backend bug
+        if (!data) {
+          throw new Error('Backend sent undefined data for provider_update - this indicates a backend bug');
+        }
+        if (!data.providers) {
+          throw new Error('Backend sent malformed provider_update data - missing providers array - this indicates a backend bug');
+        }
+        
+        const providers = data.providers;
+        const newNotifications: any[] = [];
         
         // Check for unconfigured providers
         providers.forEach((provider: any) => {
@@ -97,23 +91,36 @@ const Sidebar: React.FC<SidebarProps> = ({
             });
           }
         });
-      }
-      
-      // Check models - removed context window notifications as they will be shown as warning icons on models
-      
-      setNotifications(newNotifications);
-    } catch (error) {
-      console.error('Failed to check system health:', error);
-      setNotifications([{
-        id: 'health-check-error',
-        type: 'error',
-        title: 'Health Check Failed',
-        message: 'Failed to perform system health check. Please try again.',
-        timestamp: new Date().toISOString()
-      }]);
-    } finally {
-      setCheckingHealth(false);
-    }
+        
+        setNotifications(newNotifications);
+        setCheckingHealth(false);
+      },
+    });
+
+    // Request agents via WebSocket
+    console.log('🔄 [Frontend] Sidebar requesting agents via WebSocket');
+    connectionManager.sendGetAgents();
+    setLoading(true);
+    console.log('🔄 [Frontend] Sidebar loading set to true');
+    
+    // Request providers via WebSocket
+    console.log('🔄 [Frontend] Sidebar requesting providers via WebSocket');
+    connectionManager.sendGetProviders();
+    setCheckingHealth(true);
+  }, []);
+
+  const handleNavigation = (path: string) => {
+    navigate(path);
+  };
+
+  const handleAgentSelect = (agentId: string) => {
+    onAgentSelect(agentId);
+    setActiveTab('agents');
+  };
+
+  const handleAgentSettings = (agentId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    onAgentSettings(agentId);
   };
 
   const getNotificationIcon = () => {
@@ -313,7 +320,10 @@ const Sidebar: React.FC<SidebarProps> = ({
                 <Button
                   size="xs"
                   variant="light"
-                  onClick={checkSystemHealth}
+                  onClick={() => {
+                    setCheckingHealth(true);
+                    connectionManager.sendGetProviders();
+                  }}
                   loading={checkingHealth}
                 >
                   Refresh

@@ -6,7 +6,7 @@
 import { connectionManager } from './ConnectionManager';
 
 export interface FrontendAPIMessage {
-  type: 'system_message' | 'agent_response' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created';
+  type: 'system_message' | 'agent_response' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
   message_id: string;
   timestamp: string;
   agent_id?: string;
@@ -27,12 +27,18 @@ export interface FrontendAPIHandlers {
   onContextUpdate?: (agentId: string, sessionId: string, data: any) => void;
   onNotification?: (type: string, message: string) => void;
   onAgentListUpdate?: (data: any) => void;
+  onAgentListUpdateSidebar?: (data: any) => void;
+  onAgentListUpdateAgentsPage?: (data: any) => void;
+  onAgentListUpdateAgentChat?: (data: any) => void;
   onToolUpdate?: (data: any) => void;
   onPromptUpdate?: (data: any) => void;
   onProviderUpdate?: (data: any) => void;
   onModelUpdate?: (data: any) => void;
   onSchemaUpdate?: (data: any) => void;
   onSessionCreated?: (agentId: string, sessionId: string, data: any) => void;
+  onMonitoringHealth?: (data: any) => void;
+  onMonitoringMetrics?: (data: any) => void;
+  onMonitoringErrors?: (data: any) => void;
 }
 
 export class FrontendAPIService {
@@ -55,7 +61,9 @@ export class FrontendAPIService {
   }
 
   public setHandlers(handlers: FrontendAPIHandlers): void {
-    this.handlers = handlers;
+    // Merge handlers instead of replacing them
+    this.handlers = { ...this.handlers, ...handlers };
+    console.log('🔄 [Frontend] FrontendAPI handlers updated:', Object.keys(this.handlers).filter(key => this.handlers[key as keyof FrontendAPIHandlers]));
   }
 
   public async connect(): Promise<void> {
@@ -76,11 +84,17 @@ export class FrontendAPIService {
       };
 
       this.ws.onmessage = (event) => {
+        console.log('📥 [Frontend] FrontendAPI received message:', event.data);
         try {
           const message: FrontendAPIMessage = JSON.parse(event.data);
+          console.log('📥 [Frontend] Parsed FrontendAPI message:', message);
           this.handleMessage(message);
         } catch (error) {
-          console.error('Error parsing FrontendAPI message:', error);
+          console.error('❌ [Frontend] Error parsing FrontendAPI message:', error);
+          // Trigger global error handler
+          if (this.handlers.onError) {
+            this.handlers.onError('', '', { code: 'parse_error', message: `Failed to parse FrontendAPI message: ${error}` });
+          }
         }
       };
 
@@ -90,75 +104,138 @@ export class FrontendAPIService {
         this.handleDisconnect();
       };
 
-      this.ws.onerror = (error) => {
-        console.error('FrontendAPI WebSocket error:', error);
+      this.ws.onerror = (event) => {
+        // Extract meaningful error information from WebSocket Event
+        const errorDetails = this.extractWebSocketErrorDetails(event);
+        console.error('FrontendAPI WebSocket error:', errorDetails);
         this.isConnecting = false;
+        
+        // Trigger global error handler with proper error message
+        if (this.handlers.onError) {
+          this.handlers.onError('', '', { 
+            code: 'websocket_error', 
+            message: `FrontendAPI WebSocket error: ${errorDetails.message}`,
+            details: errorDetails
+          });
+        }
       };
 
     } catch (error) {
       console.error('Error connecting to FrontendAPI:', error);
       this.isConnecting = false;
       this.handleDisconnect();
+      // Trigger global error handler
+      if (this.handlers.onError) {
+        this.handlers.onError('', '', { code: 'connection_error', message: `Failed to connect to FrontendAPI: ${error}` });
+      }
     }
   }
 
   private handleMessage(message: FrontendAPIMessage): void {
+    console.log('🔄 [Frontend] handleMessage() called with type:', message.type);
     const sessionId = message.session_id || '';
     
     switch (message.type) {
       case 'system_message':
+        console.log('📥 [Frontend] Processing system_message for agent:', message.agent_id);
         if (this.handlers.onSystemMessage && message.agent_id) {
           this.handlers.onSystemMessage(message.agent_id, sessionId, message.data);
         }
         break;
 
       case 'agent_response':
+        console.log('📥 [Frontend] Processing agent_response for agent:', message.agent_id);
         if (this.handlers.onAgentResponse && message.agent_id) {
           this.handlers.onAgentResponse(message.agent_id, sessionId, message.data);
         }
         break;
 
       case 'seed_message':
+        console.log('📥 [Frontend] Processing seed_message for agent:', message.agent_id);
         if (this.handlers.onSeedMessage && message.agent_id) {
           this.handlers.onSeedMessage(message.agent_id, sessionId, message.data);
         }
         break;
 
       case 'error':
+        console.log('❌ [Frontend] Processing error for agent:', message.agent_id);
         if (this.handlers.onError && message.agent_id) {
           this.handlers.onError(message.agent_id, sessionId, message.error || { code: 'unknown', message: 'Unknown error' });
         }
         break;
 
+      case 'session_created':
+        console.log('📥 [Frontend] Processing session_created for agent:', message.agent_id);
+        if (this.handlers.onSessionCreated && message.agent_id) {
+          this.handlers.onSessionCreated(message.agent_id, message.data.session_id || '', message.data);
+        }
+        break;
+
       case 'context_update':
+        console.log('📥 [Frontend] Processing context_update for agent:', message.agent_id);
         if (this.handlers.onContextUpdate && message.agent_id) {
           this.handlers.onContextUpdate(message.agent_id, sessionId, message.data);
         }
         break;
 
       case 'notification':
+        console.log('📥 [Frontend] Processing notification:', message.data);
         if (this.handlers.onNotification && message.data) {
           this.handlers.onNotification(message.data.type || 'info', message.data.message || '');
         }
         break;
 
       case 'agent_list_update':
+        console.log('📥 [Frontend] Processing agent_list_update:', message.data);
         // Store agents in ConnectionManager for global access
         if (message.data && message.data.agents) {
+          console.log('📥 [Frontend] Updating agents in ConnectionManager:', message.data.agents);
           connectionManager.updateAgents(message.data.agents);
         }
+        
+        // Call all agent list update handlers
         if (this.handlers.onAgentListUpdate) {
+          console.log('📥 [Frontend] Calling onAgentListUpdate handler');
           this.handlers.onAgentListUpdate(message.data);
+        }
+        if (this.handlers.onAgentListUpdateSidebar) {
+          console.log('📥 [Frontend] Calling onAgentListUpdateSidebar handler');
+          this.handlers.onAgentListUpdateSidebar(message.data);
+        }
+        if (this.handlers.onAgentListUpdateAgentsPage) {
+          console.log('📥 [Frontend] Calling onAgentListUpdateAgentsPage handler');
+          this.handlers.onAgentListUpdateAgentsPage(message.data);
+        }
+        if (this.handlers.onAgentListUpdateAgentChat) {
+          console.log('📥 [Frontend] Calling onAgentListUpdateAgentChat handler');
+          this.handlers.onAgentListUpdateAgentChat(message.data);
+        }
+        
+        if (!this.handlers.onAgentListUpdate && !this.handlers.onAgentListUpdateSidebar && 
+            !this.handlers.onAgentListUpdateAgentsPage && !this.handlers.onAgentListUpdateAgentChat) {
+          console.warn('⚠️ [Frontend] No agent list update handlers registered');
         }
         break;
 
       case 'tool_update':
+        console.log('📥 [Frontend] Processing tool_update:', message.data);
+        if (!message.data || !Array.isArray(message.data.tools)) {
+          throw new Error('Backend sent malformed tool_update data - missing tools array');
+        }
+        console.log('📥 [Frontend] Updating tools in ConnectionManager:', message.data.tools);
+        connectionManager.updateTools(message.data.tools);
         if (this.handlers.onToolUpdate) {
           this.handlers.onToolUpdate(message.data);
         }
         break;
 
       case 'prompt_update':
+        console.log('📥 [Frontend] Processing prompt_update:', message.data);
+        if (!message.data || !Array.isArray(message.data.prompts)) {
+          throw new Error('Backend sent malformed prompt_update data - missing prompts array');
+        }
+        console.log('📥 [Frontend] Updating prompts in ConnectionManager:', message.data.prompts);
+        connectionManager.updatePrompts(message.data.prompts);
         if (this.handlers.onPromptUpdate) {
           this.handlers.onPromptUpdate(message.data);
         }
@@ -171,6 +248,12 @@ export class FrontendAPIService {
         break;
 
       case 'model_update':
+        console.log('📥 [Frontend] Processing model_update:', message.data);
+        if (!message.data || !Array.isArray(message.data.models)) {
+          throw new Error('Backend sent malformed model_update data - missing models array');
+        }
+        console.log('📥 [Frontend] Updating models in ConnectionManager:', message.data.models);
+        connectionManager.updateModels(message.data.models);
         if (this.handlers.onModelUpdate) {
           this.handlers.onModelUpdate(message.data);
         }
@@ -182,9 +265,23 @@ export class FrontendAPIService {
         }
         break;
 
-      case 'session_created':
-        if (this.handlers.onSessionCreated && message.agent_id) {
-          this.handlers.onSessionCreated(message.agent_id, message.session_id || '', message.data);
+
+
+      case 'monitoring_health':
+        if (this.handlers.onMonitoringHealth) {
+          this.handlers.onMonitoringHealth(message.data);
+        }
+        break;
+
+      case 'monitoring_metrics':
+        if (this.handlers.onMonitoringMetrics) {
+          this.handlers.onMonitoringMetrics(message.data);
+        }
+        break;
+
+      case 'monitoring_errors':
+        if (this.handlers.onMonitoringErrors) {
+          this.handlers.onMonitoringErrors(message.data);
         }
         break;
 
@@ -223,6 +320,54 @@ export class FrontendAPIService {
 
   public getConnectionId(): string {
     return this.connectionId;
+  }
+
+  private extractWebSocketErrorDetails(event: Event): { message: string; type: string; details: any } {
+    // Extract meaningful information from WebSocket error event
+    const details: any = {
+      type: event.type,
+      timeStamp: event.timeStamp,
+      target: {
+        readyState: (event.target as WebSocket)?.readyState,
+        url: (event.target as WebSocket)?.url,
+        protocol: (event.target as WebSocket)?.protocol
+      }
+    };
+
+    // Determine error message based on WebSocket state
+    let message = 'Unknown WebSocket error';
+    const target = event.target as WebSocket;
+    
+    if (target) {
+      switch (target.readyState) {
+        case WebSocket.CONNECTING:
+          message = 'Connection failed - Unable to establish WebSocket connection';
+          break;
+        case WebSocket.OPEN:
+          message = 'Connection error during active session';
+          break;
+        case WebSocket.CLOSING:
+          message = 'Connection error while closing';
+          break;
+        case WebSocket.CLOSED:
+          message = 'Connection lost - WebSocket closed unexpectedly';
+          break;
+        default:
+          message = 'WebSocket in unknown state';
+      }
+
+      // Add more specific details
+      if (target.url) {
+        details.url = target.url;
+        message += ` (${target.url})`;
+      }
+    }
+
+    return {
+      message,
+      type: event.type,
+      details
+    };
   }
 }
 

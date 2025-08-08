@@ -32,6 +32,21 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   useEffect(() => {
     if (agentId) {
       loadAgentInfo();
+      // Restore session and messages from cache if available
+      const cachedSession = connectionManager.getSessionId(agentId);
+      if (cachedSession) {
+        setSessionId(cachedSession);
+        const cachedMessages = connectionManager.getMessages(agentId);
+        if (cachedMessages.length > 0) {
+          setMessages(cachedMessages);
+        }
+        const cachedContext = connectionManager.getContext(agentId);
+        if (cachedContext) {
+          setContextUsage(cachedContext.percentage);
+          setTokensUsed(cachedContext.tokensUsed);
+          setContextWindow(cachedContext.contextWindow);
+        }
+      }
     }
   }, [agentId]);
 
@@ -39,6 +54,17 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   useEffect(() => {
     if (agentInfo && sessionId) {
       loadAgentHistory();
+    }
+  }, [agentInfo, sessionId]);
+
+  // Create session automatically when agentInfo is loaded
+  useEffect(() => {
+    if (agentInfo && !sessionId) {
+      // Only create a new session if none exists in cache
+      const cachedSession = connectionManager.getSessionId(agentId);
+      if (!cachedSession) {
+        createNewSession();
+      }
     }
   }, [agentInfo, sessionId]);
 
@@ -59,62 +85,142 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
     if (agentId) {
       connectionManager.setFrontendAPIHandlers({
         onSystemMessage: (_agentId: string, _sessionId: string, data: any) => {
+          // Assert that data is properly structured - if not, there's a backend bug
+          if (!data) {
+            throw new Error('Backend sent undefined data for system_message - this indicates a backend bug');
+          }
+          if (!data.content) {
+            throw new Error('Backend sent malformed system_message data - missing content - this indicates a backend bug');
+          }
+          
           const systemMessage: Message = {
             id: `system-${Date.now()}`,
             agent_id: agentId,
-            content: data.content || '',
+            content: data.content,
             message_type: MessageType.SYSTEM,
             timestamp: data.timestamp || new Date().toISOString(),
             metadata: data.metadata || {},
           };
           setMessages(prev => [...prev, systemMessage]);
+          connectionManager.appendMessage(agentId, systemMessage);
         },
         onAgentResponse: (_agentId: string, _sessionId: string, data: any) => {
+          // Assert that data is properly structured - if not, there's a backend bug
+          if (!data) {
+            throw new Error('Backend sent undefined data for agent_response - this indicates a backend bug');
+          }
+          if (!data.content) {
+            throw new Error('Backend sent malformed agent_response data - missing content - this indicates a backend bug');
+          }
+          
+          // Convert message_type to proper enum value
+          let messageType = MessageType.CHAT_RESPONSE; // default
+          if (data.message_type) {
+            const upperType = data.message_type.toUpperCase();
+            if (upperType in MessageType) {
+              messageType = MessageType[upperType as keyof typeof MessageType];
+            }
+          }
+          
           const agentMessage: Message = {
             id: `agent-${Date.now()}`,
             agent_id: agentId,
-            content: data.content || '',
-            message_type: data.message_type || MessageType.CHAT_RESPONSE,
+            content: data.content,
+            message_type: messageType,
             timestamp: data.timestamp || new Date().toISOString(),
             metadata: data.metadata || {},
             action: data.action,
             reasoning: data.reasoning,
           };
           setMessages(prev => [...prev, agentMessage]);
+          connectionManager.appendMessage(agentId, agentMessage);
           setIsLoading(false);
         },
         onSeedMessage: (_agentId: string, _sessionId: string, data: any) => {
+          // Assert that data is properly structured - if not, there's a backend bug
+          if (!data) {
+            throw new Error('Backend sent undefined data for seed_message - this indicates a backend bug');
+          }
+          if (!data.content) {
+            throw new Error('Backend sent malformed seed_message data - missing content - this indicates a backend bug');
+          }
+          
+          // Convert message_type to proper enum value for seed messages
+          let seedMessageType = MessageType.SYSTEM; // default
+          if (data.message_type) {
+            const upperType = data.message_type.toUpperCase();
+            if (upperType in MessageType) {
+              seedMessageType = MessageType[upperType as keyof typeof MessageType];
+            }
+          }
+          
           const seedMessage: Message = {
             id: `seed-${Date.now()}`,
             agent_id: agentId,
-            content: data.content || '',
-            message_type: data.message_type || MessageType.SYSTEM,
+            content: data.content,
+            message_type: seedMessageType,
             timestamp: data.timestamp || new Date().toISOString(),
             metadata: data.metadata || {},
           };
           setMessages(prev => [...prev, seedMessage]);
+          connectionManager.appendMessage(agentId, seedMessage);
         },
         onError: (_agentId: string, _sessionId: string, error: any) => {
-          ErrorHandler.showError(new Error(error.message || 'Unknown error'), 'WebSocket Error');
+          // Assert that error is properly structured - if not, there's a backend bug
+          if (!error) {
+            throw new Error('Backend sent undefined error data - this indicates a backend bug');
+          }
+          if (!error.message) {
+            throw new Error('Backend sent malformed error data - missing message - this indicates a backend bug');
+          }
+          
+          ErrorHandler.showError(new Error(error.message), 'WebSocket Error');
           setIsLoading(false);
         },
         onSessionCreated: (receivedAgentId: string, _sessionId: string, data: any) => {
+          // Assert that data is properly structured - if not, there's a backend bug
+          if (!data) {
+            throw new Error('Backend sent undefined data for session_created - this indicates a backend bug');
+          }
+          if (!data.session_id) {
+            throw new Error('Backend sent malformed session_created data - missing session_id - this indicates a backend bug');
+          }
+          
           if (receivedAgentId === agentId) { // This should be the current agent
+            // New session replaces any previous one for this agent
+            connectionManager.clearSession(agentId);
+            connectionManager.setSessionId(agentId, data.session_id);
             setSessionId(data.session_id);
+            setIsLoading(false); // Clear loading state when session is created
           }
         },
         onContextUpdate: (_agentId: string, _sessionId: string, data: any) => {
+          // Assert that data is properly structured - if not, there's a backend bug
+          if (!data) {
+            throw new Error('Backend sent undefined data for context_update - this indicates a backend bug');
+          }
+          if (data.percentage === undefined) {
+            throw new Error('Backend sent malformed context_update data - missing percentage - this indicates a backend bug');
+          }
+          
           setContextUsage(data.percentage);
           setTokensUsed(data.tokens_used);
           setContextWindow(data.context_window);
+          connectionManager.setContext(agentId, data.percentage, data.tokens_used, data.context_window);
         },
-        onAgentListUpdate: (data: any) => {
+        onAgentListUpdateAgentChat: (data: any) => {
+          // Assert that data is properly structured - if not, there's a backend bug
+          if (!data) {
+            throw new Error('Backend sent undefined data for agent_list_update - this indicates a backend bug');
+          }
+          if (!data.agents) {
+            throw new Error('Backend sent malformed agent_list_update data - missing agents array - this indicates a backend bug');
+          }
+          
           // When agents are updated, try to load the current agent info
-          if (data.agents) {
-            const agent = data.agents.find((a: any) => a.agent_id === agentId);
-            if (agent && !agentInfo) {
-              setAgentInfo(agent);
-            }
+          const agent = data.agents.find((a: any) => a.agent_id === agentId);
+          if (agent && !agentInfo) {
+            setAgentInfo(agent);
           }
         },
         onNotification: (type: string, message: string) => {
@@ -129,11 +235,17 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
       // Register this agent for the connection
       connectionManager.sendRegisterAgent(agentId);
       
-      // Create session if not provided
+      // Create session if not provided AND no cached one exists
       if (!propSessionId) {
-        createNewSession();
+        const cachedSession = connectionManager.getSessionId(agentId);
+        if (cachedSession) {
+          setSessionId(cachedSession);
+        } else {
+          createNewSession();
+        }
       } else {
         setSessionId(propSessionId);
+        connectionManager.setSessionId(agentId, propSessionId);
       }
     }
   }, [agentId, propSessionId]);
@@ -147,10 +259,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
       // The backend will generate its own session ID
       connectionManager.sendAgentRefresh(agentId, 'temp_session');
       
-      // Clear loading state after a short delay to allow for system messages
-      setTimeout(() => {
-        setIsLoading(false);
-      }, 2000);
+      // Note: Loading state will be cleared when session_created message is received
+      // or when an error occurs
       
     } catch (error) {
       ErrorHandler.showError(error, 'Failed to Create Session');
@@ -177,12 +287,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   const loadAgentHistory = async () => {
     try {
       if (!sessionId) return;
-      
-      // For now, we'll start with an empty conversation
-      // The backend will send seed messages via WebSocket when the session is created
-      setMessages([]);
-      
-      // Set progress bar to N/A initially - will be updated after first message
+      // Restore messages from cache if available; otherwise start empty
+      const cachedMessages = connectionManager.getMessages(agentId);
+      setMessages(cachedMessages);
+      // Set progress bar to N/A initially - backend updates after first response
       setContextUsage(null);
       setTokensUsed(null);
       setContextWindow(null);
@@ -204,6 +312,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
     };
 
     setMessages(prev => [...prev, userMessage]);
+    connectionManager.appendMessage(agentId, userMessage);
     setInputMessage('');
     setIsLoading(true);
 
@@ -234,7 +343,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
       // Send refresh via WebSocket
       connectionManager.sendAgentRefresh(agentId, sessionId);
       
-      // Clear messages
+      // Clear local and cached state; new session will arrive via session_created
+      connectionManager.clearSession(agentId);
+      connectionManager.clearContext(agentId);
+      setSessionId(null);
       setMessages([]);
       setContextUsage(null);
       setTokensUsed(null);
@@ -332,10 +444,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             />
             <Button
               onClick={sendMessage}
-              disabled={!inputMessage.trim() || isLoading || !connectionManager.isConnected()}
+              disabled={!inputMessage.trim() || isLoading || !connectionManager.isConnected() || !sessionId}
               leftSection={<IconSend size={16} />}
             >
-              Send
+              {!sessionId ? 'Creating Session...' : 'Send'}
             </Button>
           </Group>
         </Box>

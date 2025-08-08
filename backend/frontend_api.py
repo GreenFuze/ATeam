@@ -45,29 +45,35 @@ class FrontendAPI:
     
     async def send_to_connection(self, connection_id: str, message: Dict[str, Any]):
         """Send a message to a specific connection"""
+        logger.info(f"🔄 [Backend] send_to_connection() called for {connection_id}")
         if connection_id in self.active_connections:
             try:
                 websocket = self.active_connections[connection_id]
                 # Check if websocket is still open before sending
                 if websocket.client_state.value == 1:  # WebSocketState.CONNECTED
-                    await websocket.send_text(json.dumps(message))
+                    message_str = json.dumps(message)
+                    logger.info(f"📤 [Backend] Sending to {connection_id}: {message_str}")
+                    await websocket.send_text(message_str)
+                    logger.info(f"✅ [Backend] Successfully sent to {connection_id}")
                 else:
-                    logger.warning(f"WebSocket {connection_id} is not in connected state")
+                    logger.warning(f"❌ [Backend] WebSocket {connection_id} is not in connected state")
                     self.disconnect(connection_id)
             except WebSocketDisconnect:
-                logger.info(f"WebSocket {connection_id} disconnected")
+                logger.info(f"📤 [Backend] WebSocket {connection_id} disconnected")
                 self.disconnect(connection_id)
             except Exception as e:
-                logger.error(f"Error sending to connection {connection_id}: {e}")
+                logger.error(f"❌ [Backend] Error sending to connection {connection_id}: {e}")
                 self.disconnect(connection_id)
+        else:
+            logger.warning(f"❌ [Backend] Connection {connection_id} not found in active connections")
     
     async def send_to_agent(self, agent_id: str, message: Dict[str, Any]):
         """Send a message to all connections listening to a specific agent"""
-        if agent_id in self.agent_connections:
-            # Create a copy of the list to avoid modification during iteration
-            connection_ids = list(self.agent_connections[agent_id])
-            for connection_id in connection_ids:
-                await self.send_to_connection(connection_id, message)
+        # Send to all active connections since agent-specific messages should go to all frontends
+        # This avoids the issue of agent registration happening on the wrong connection
+        connection_ids = list(self.active_connections.keys())
+        for connection_id in connection_ids:
+            await self.send_to_connection(connection_id, message)
     
     async def send_system_message(self, agent_id: str, content: str):
         """Send system message to frontend"""
@@ -167,16 +173,20 @@ class FrontendAPI:
 
     async def send_agent_list_update(self, data: Dict[str, Any]):
         """Send agent list update to all frontend connections"""
+        logger.info(f"🔄 [Backend] send_agent_list_update() called with data: {data}")
         message = {
             "type": "agent_list_update",
             "message_id": f"msg_{datetime.now().timestamp()}",
             "timestamp": datetime.now().isoformat(),
             "data": data
         }
+        logger.info(f"📤 [Backend] Sending agent_list_update message: {message}")
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
+        logger.info(f"📤 [Backend] Sending to {len(connection_ids)} connections: {connection_ids}")
         for connection_id in connection_ids:
             await self.send_to_connection(connection_id, message)
+        logger.info("✅ [Backend] agent_list_update sent to all connections")
 
     async def send_tool_update(self, data: Dict[str, Any]):
         """Send tool update to all frontend connections"""

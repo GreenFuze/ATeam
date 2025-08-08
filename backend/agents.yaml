@@ -6,7 +6,7 @@ agents:
   grammar_file: null
   id: zeus
   max_tokens: null
-  model: llama3.1:8b
+  model: nous-hermes2:10.7b
   name: Zeus
   prompts:
   - zeus_system.md

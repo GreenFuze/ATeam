@@ -208,8 +208,8 @@ const PromptManager: React.FC = () => {
 
               <div className="mt-4 pt-4 border-t border-gray-200">
                 <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>Created: {formatDate(prompt.created_at || '')}</span>
-                  <span>Updated: {formatDate(prompt.updated_at || '')}</span>
+                  <span>Created: {formatDate(prompt.created_at || 'Unknown')}</span>
+                  <span>Updated: {formatDate(prompt.updated_at || 'Unknown')}</span>
                 </div>
               </div>
             </div>

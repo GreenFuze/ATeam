@@ -9,6 +9,8 @@ import AgentChat from './components/AgentChat';
 import AgentsPage from './components/AgentsPage';
 import SettingsPage from './components/SettingsPage';
 import AgentSettingsModal from './components/AgentSettingsModal';
+import ErrorDialog from './components/ErrorDialog';
+import StartupScreen from './components/StartupScreen';
 import { connectionManager } from './services/ConnectionManager';
 import { notifications } from '@mantine/notifications';
 
@@ -43,6 +45,9 @@ function App() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<any>(null);
   const [_connectionStatus, setConnectionStatus] = useState({ frontendAPI: false, backendAPI: false, isConnecting: false });
+  const [error, setError] = useState<string | null>(null);
+  const [isStartupComplete, setIsStartupComplete] = useState(false);
+  const [_startupError, setStartupError] = useState<Error | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -70,22 +75,31 @@ function App() {
               color: 'green',
             });
           },
+          onError: (errorMessage) => {
+            setError(errorMessage);
+          },
         });
 
-        // Connect to WebSocket services
-        await connectionManager.connect();
-        console.log('Global WebSocket connections established');
-        
-        // Load initial data via WebSocket
-        connectionManager.sendGetAgents();
-        
-      } catch (error) {
-        console.error('Failed to initialize WebSocket connections:', error);
-        notifications.show({
-          title: 'Connection Error',
-          message: 'Failed to establish WebSocket connections. Some features may not work properly.',
-          color: 'red',
+        // Set up FrontendAPI error handlers
+        connectionManager.setFrontendAPIHandlers({
+          onError: (_agentId: string, _sessionId: string, error: any) => {
+            // Assert that error is properly structured - if not, there's a backend bug
+            if (!error) {
+              throw new Error('Backend sent undefined error data - this indicates a backend bug');
+            }
+            if (!error.message) {
+              throw new Error('Backend sent malformed error data - missing message - this indicates a backend bug');
+            }
+            
+            setError(`WebSocket Error: ${error.message}`);
+          },
         });
+        
+        // Note: Connection and data loading will be handled by StartupScreen
+        console.log('App initialization complete - waiting for startup screen');
+      } catch (error) {
+        console.error('Error during app initialization:', error);
+        setError(`Initialization Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
     };
 
@@ -119,16 +133,16 @@ function App() {
   };
 
   const handleAgentSettings = (agentId: string) => {
-    // Fetch agent data and open settings modal
-    fetch(`/api/agents/${agentId}`)
-      .then(response => response.json())
-      .then(agent => {
-        setEditingAgent(agent);
-        setSettingsModalOpen(true);
-      })
-      .catch(error => {
-        console.error('Failed to fetch agent:', error);
-      });
+    // Get agent data from ConnectionManager (already loaded via WebSocket)
+    const agents = connectionManager.getAgents();
+    const agent = agents.find(a => a.id === agentId);
+    
+    if (!agent) {
+      throw new Error(`Agent with ID '${agentId}' not found in ConnectionManager - this indicates a frontend bug`);
+    }
+    
+    setEditingAgent(agent);
+    setSettingsModalOpen(true);
   };
 
   const handleSettingsSuccess = () => {
@@ -136,24 +150,41 @@ function App() {
     window.location.reload();
   };
 
+  const handleStartupComplete = () => {
+    setIsStartupComplete(true);
+    console.log('Startup completed successfully - application ready');
+  };
+
+  const handleStartupError = (error: Error) => {
+    setStartupError(error);
+    console.error('Fatal startup error:', error);
+  };
+
   return (
     <MantineProvider theme={theme} defaultColorScheme="dark">
-      <div className="app">
-        <Sidebar
-          onAgentSelect={handleAgentSelect}
-          selectedAgentId={selectedAgent}
-          onAddAgent={handleAddAgent}
-          onAgentSettings={handleAgentSettings}
+      {!isStartupComplete ? (
+        <StartupScreen
+          onStartupComplete={handleStartupComplete}
+          onStartupError={handleStartupError}
         />
-        <main className="main-content">
-          <Routes>
-            <Route path="/" element={<Navigate to="/agents" replace />} />
-            <Route path="/agents" element={<AgentsPage onAgentSelect={handleAgentSelect} />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/chat/:agentId" element={<AgentChatWrapper />} />
-          </Routes>
-        </main>
-      </div>
+      ) : (
+        <div className="app">
+          <Sidebar
+            onAgentSelect={handleAgentSelect}
+            selectedAgentId={selectedAgent}
+            onAddAgent={handleAddAgent}
+            onAgentSettings={handleAgentSettings}
+          />
+          <main className="main-content">
+            <Routes>
+              <Route path="/" element={<Navigate to="/agents" replace />} />
+              <Route path="/agents" element={<AgentsPage onAgentSelect={handleAgentSelect} />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/chat/:agentId" element={<AgentChatWrapper />} />
+            </Routes>
+          </main>
+        </div>
+      )}
 
       {/* Global Agent Settings Modal */}
       <AgentSettingsModal
@@ -161,6 +192,13 @@ function App() {
         onClose={() => setSettingsModalOpen(false)}
         agent={editingAgent}
         onSuccess={handleSettingsSuccess}
+      />
+
+      {/* Global Error Dialog */}
+      <ErrorDialog
+        isOpen={!!error}
+        error={error}
+        onClose={() => setError(null)}
       />
     </MantineProvider>
   );

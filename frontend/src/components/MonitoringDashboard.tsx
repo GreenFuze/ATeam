@@ -13,6 +13,7 @@ import {
   ThemeIcon,
 } from '@mantine/core';
 import { IconActivity, IconAlertTriangle, IconCheck, IconX } from '@tabler/icons-react';
+import { connectionManager } from '../services/ConnectionManager';
 
 interface SystemHealth {
   system: {
@@ -53,51 +54,38 @@ const MonitoringDashboard: React.FC = () => {
   const [errorSummary, setErrorSummary] = useState<ErrorSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchSystemHealth = async () => {
-    try {
-      const response = await fetch('/api/monitoring/health');
-      const data = await response.json();
-      setSystemHealth(data);
-    } catch (error) {
-      console.error('Failed to fetch system health:', error);
-    }
-  };
-
-  const fetchPerformanceMetrics = async () => {
-    try {
-      const response = await fetch('/api/monitoring/metrics');
-      const data = await response.json();
-      setPerformanceMetrics(data);
-    } catch (error) {
-      console.error('Failed to fetch performance metrics:', error);
-    }
-  };
-
-  const fetchErrorSummary = async () => {
-    try {
-      const response = await fetch('/api/monitoring/errors');
-      const data = await response.json();
-      setErrorSummary(data);
-    } catch (error) {
-      console.error('Failed to fetch error summary:', error);
-    }
-  };
-
   useEffect(() => {
-    const fetchData = async () => {
-      setLoading(true);
-      await Promise.all([
-        fetchSystemHealth(),
-        fetchPerformanceMetrics(),
-        fetchErrorSummary(),
-      ]);
-      setLoading(false);
-    };
+    // Set up WebSocket handlers for monitoring data
+    connectionManager.setFrontendAPIHandlers({
+      onMonitoringHealth: (data: any) => {
+        console.log('Received monitoring health:', data);
+        setSystemHealth(data);
+        setLoading(false);
+      },
+      onMonitoringMetrics: (data: any) => {
+        console.log('Received monitoring metrics:', data);
+        setPerformanceMetrics(data);
+        setLoading(false);
+      },
+      onMonitoringErrors: (data: any) => {
+        console.log('Received monitoring errors:', data);
+        setErrorSummary(data);
+        setLoading(false);
+      },
+    });
 
-    fetchData();
+    // Load initial data via WebSocket
+    setLoading(true);
+    connectionManager.sendGetMonitoringHealth();
+    connectionManager.sendGetMonitoringMetrics();
+    connectionManager.sendGetMonitoringErrors();
     
     // Refresh data every 30 seconds
-    const interval = setInterval(fetchData, 30000);
+    const interval = setInterval(() => {
+      connectionManager.sendGetMonitoringHealth();
+      connectionManager.sendGetMonitoringMetrics();
+      connectionManager.sendGetMonitoringErrors();
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -218,7 +206,7 @@ const MonitoringDashboard: React.FC = () => {
                 <div>
                   <Text fw={500}>LLM Service</Text>
                   <Text size="sm" c="dimmed">
-                    {systemHealth.llm.message || systemHealth.llm.error}
+                    {systemHealth.llm.message || systemHealth.llm.error || 'No status message'}
                   </Text>
                 </div>
               </Group>
@@ -233,6 +221,11 @@ const MonitoringDashboard: React.FC = () => {
           <Title order={3} mb="md">Performance Metrics</Title>
           <Grid>
             {Object.entries(performanceMetrics).slice(0, 6).map(([metricName, data]) => {
+              // Assert that data is properly structured - if not, there's a backend bug
+              if (!data || data.length === 0) {
+                throw new Error(`Backend sent malformed performance metrics data for ${metricName} - empty or missing data array - this indicates a backend bug`);
+              }
+              
               const latestValue = data[data.length - 1]?.value || 0;
               const avgValue = data.reduce((sum, item) => sum + item.value, 0) / data.length || 0;
               

@@ -272,13 +272,13 @@ class PromptManager:
     def create_seed_prompt(self, name: str, messages: List[SeedMessage]) -> str:
         """Create a seed prompt from a list of messages"""
         # Convert messages to JSON format for llm chat
-        content = json.dumps([msg.dict() for msg in messages], indent=2)
+        content = json.dumps([msg.model_dump() for msg in messages], indent=2)
         return self.create_prompt(name, content, PromptType.SEED)
     
     def update_seed_prompt(self, name: str, messages: List[SeedMessage]):
         """Update a seed prompt with new messages"""
         # Convert messages to JSON format for llm chat
-        content = json.dumps([msg.dict() for msg in messages], indent=2)
+        content = json.dumps([msg.model_dump() for msg in messages], indent=2)
         self.update_prompt(name, content)
     
     def parse_seed_prompt(self, name: str) -> List[SeedMessage]:

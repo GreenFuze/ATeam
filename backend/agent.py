@@ -227,12 +227,12 @@ class Agent:
         except Exception as e:
             raise ValueError(f"Error parsing LLM response: {str(e)}")
     
-    def _handle_structured_response(self, structured_response: StructuredResponseType) -> LLMResponse:
+    async def _handle_structured_response(self, structured_response: StructuredResponseType) -> LLMResponse:
         """Handle different response actions"""
         if isinstance(structured_response, ChatResponse):
             return self._handle_chat_response(structured_response)
         elif isinstance(structured_response, ToolCallResponse):
-            return self._handle_tool_call(structured_response)
+            return await self._handle_tool_call(structured_response)
         elif isinstance(structured_response, ToolReturnResponse):
             return self._handle_tool_return(structured_response)
         elif isinstance(structured_response, AgentDelegateResponse):
@@ -262,7 +262,7 @@ class Agent:
             icon=response.icon
         )
     
-    def _handle_tool_call(self, response: ToolCallResponse) -> LLMResponse:
+    async def _handle_tool_call(self, response: ToolCallResponse) -> LLMResponse:
         """Handle tool call - execute tool and continue conversation"""
         # Lazy import to avoid circular dependency
         from tool_executor import run_tool
@@ -285,7 +285,7 @@ class Agent:
         self.messages.append(tool_message)
         
         # Continue conversation with tool result
-        return self.get_response(f"Tool {response.tool} returned: {tool_result.result}")
+        return await self.get_response(f"Tool {response.tool} returned: {tool_result.result}")
     
     def _handle_tool_return(self, response: ToolReturnResponse) -> LLMResponse:
         """Handle tool return - this should not happen in normal flow"""
@@ -377,6 +377,44 @@ class Agent:
             reasoning=response.why
         )
     
+    def _calculate_context_usage(self):
+        """Calculate context usage for the current conversation"""
+        from schemas import ContextUsageData
+        from objects_registry import models_manager
+        
+        # Get total conversation length in characters
+        total_content = ""
+        for message in self.messages:
+            total_content += message.content + " "
+        
+        # Add system prompts and tools to context calculation
+        total_content += self._build_conversation_context("")
+        
+        # Rough token estimation: 4 characters per token
+        estimated_tokens = len(total_content) // 4
+        
+        # Get model context window size
+        try:
+            model_info = models_manager().get_model(self.config.model)
+            context_window = model_info.context_window_size if model_info else None
+        except:
+            context_window = None
+        
+        # Calculate percentage
+        if context_window and context_window > 0:
+            percentage = min((estimated_tokens / context_window) * 100, 100.0)
+        else:
+            # Default to a reasonable context window if not configured
+            default_window = 4096
+            percentage = min((estimated_tokens / default_window) * 100, 100.0)
+            context_window = default_window
+        
+        return ContextUsageData(
+            tokens_used=estimated_tokens,
+            context_window=context_window,
+            percentage=percentage
+        )
+
     async def get_response(self, message: str) -> LLMResponse:
         """Get a response from the agent and send via FrontendAPI"""
         if not self.model:
@@ -421,7 +459,7 @@ class Agent:
             )
         
         # Handle the structured response
-        llm_response = self._handle_structured_response(structured_response)
+        llm_response = await self._handle_structured_response(structured_response)
         
         # Add agent response to conversation history
         agent_message = Message(
@@ -438,6 +476,14 @@ class Agent:
             target_agent_id=llm_response.target_agent_id
         )
         self.messages.append(agent_message)
+        
+        # Calculate context usage and send update
+        try:
+            context_usage = self._calculate_context_usage()
+            from objects_registry import frontend_api
+            await frontend_api().send_context_update(self.config.id, context_usage)
+        except Exception as e:
+            print(f"Warning: Failed to calculate/send context usage: {e}")
         
         # Send response via FrontendAPI
         try:

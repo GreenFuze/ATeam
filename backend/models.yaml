@@ -224,15 +224,15 @@ models:
     model_settings: {}
     name: gpt-4o-mini-audio-preview-2024-12-17
     provider: openai
-  llama3.1:8b:
+  gpt-oss:20b:
     context_window_size: 131072
     default_inference:
       stream: true
-      think: true
-    description: llama3.1:8b model from ollama (chat + embedding)
-    id: llama3.1:8b
+      temperature: 0.5
+    description: gpt-oss:20b model from ollama (chat + embedding)
+    id: gpt-oss:20b
     model_settings: {}
-    name: llama3.1:8b
+    name: gpt-oss:20b
     provider: ollama
   o1:
     context_window_size: 200000

@@ -24,7 +24,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { AgentConfig, CreateAgentRequest } from '../types';
-import { agentsApi } from '../api';
+import { connectionManager } from '../services/ConnectionManager';
 
 interface SortablePromptItemProps {
   prompt: any;
@@ -167,21 +167,31 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
 
   const loadData = async () => {
     try {
-      const [modelsResponse, promptsResponse, toolsResponse] = await Promise.all([
-        fetch('/api/models'),
-        fetch('/api/prompts'),
-        fetch('/api/tools')
-      ]);
+      // Get data from ConnectionManager which has already loaded via WebSocket
+      const modelsData = connectionManager.getModels();
+      const promptsData = connectionManager.getPrompts();
+      const toolsData = connectionManager.getTools();
 
-      const modelsData = await modelsResponse.json();
-      const promptsData = await promptsResponse.json();
-      const toolsData = await toolsResponse.json();
+      // Validate data format (fail-fast principle)
+      if (!Array.isArray(modelsData)) {
+        throw new Error('ConnectionManager returned malformed models data - expected array but got: ' + typeof modelsData);
+      }
 
-      setModels(modelsData.models || []);
-      setPrompts(promptsData.prompts || []);
-      setTools(toolsData.tools || []);
+      if (!Array.isArray(promptsData)) {
+        throw new Error('ConnectionManager returned malformed prompts data - expected array but got: ' + typeof promptsData);
+      }
+
+      if (!Array.isArray(toolsData)) {
+        throw new Error('ConnectionManager returned malformed tools data - expected array but got: ' + typeof toolsData);
+      }
+
+      setModels(modelsData);
+      setPrompts(promptsData);
+      setTools(toolsData);
     } catch (error) {
       console.error('Failed to load data:', error);
+      // Fail-fast: Re-throw the error to show it to the user
+      throw error;
     }
   };
 
@@ -189,9 +199,11 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
     setLoading(true);
     try {
       if (isEditing && agent) {
-        await agentsApi.update(agent.id, formData);
+        // Send agent update via WebSocket
+        connectionManager.sendUpdateAgent(agent.id, formData);
       } else {
-        await agentsApi.create(formData);
+        // Send agent create via WebSocket
+        connectionManager.sendCreateAgent(formData);
       }
       onSuccess();
       onClose();
@@ -211,7 +223,8 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
 
     setLoading(true);
     try {
-      await agentsApi.delete(agent.id);
+      // Send agent delete via WebSocket
+      connectionManager.sendDeleteAgent(agent.id);
       onSuccess();
       onClose();
     } catch (error) {
@@ -224,10 +237,10 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
 
 
   const handleAddPrompt = () => {
-    if (selectedPromptToAdd && !formData.prompts.includes(selectedPromptToAdd)) {
+    if (selectedPromptToAdd && (!formData.prompts || !formData.prompts.includes(selectedPromptToAdd))) {
       setFormData(prev => ({
         ...prev,
-        prompts: [...prev.prompts, selectedPromptToAdd]
+        prompts: [...(prev.prompts || []), selectedPromptToAdd]
       }));
       setSelectedPromptToAdd('');
     }
@@ -236,7 +249,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
   const handleRemovePrompt = (promptName: string) => {
     setFormData(prev => ({
       ...prev,
-      prompts: prev.prompts.filter(p => p !== promptName)
+      prompts: (prev.prompts || []).filter(p => p !== promptName)
     }));
   };
 
@@ -259,9 +272,9 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
   const handleToolToggle = (toolName: string) => {
     setFormData(prev => ({
       ...prev,
-      tools: prev.tools.includes(toolName)
-        ? prev.tools.filter(t => t !== toolName)
-        : [...prev.tools, toolName]
+      tools: (prev.tools || []).includes(toolName)
+        ? (prev.tools || []).filter(t => t !== toolName)
+        : [...(prev.tools || []), toolName]
     }));
   };
 
@@ -306,10 +319,12 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
               label="Model"
               value={formData.model}
               onChange={(value) => setFormData({ ...formData, model: value || '' })}
-              data={models.map(model => ({ 
-                value: model.id, 
-                label: model.name || model.id 
-              }))}
+              data={models
+                .filter(model => model.embedding_model === false) // Only show chat models
+                .map(model => ({ 
+                  value: model.id, 
+                  label: model.name || model.id 
+                }))}
               required
               placeholder="Select a model"
             />
@@ -365,7 +380,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
             <Select
               placeholder="Select a system prompt to add"
               data={prompts
-                .filter(prompt => !formData.prompts.includes(prompt.name))
+                .filter(prompt => !formData.prompts || !formData.prompts.includes(prompt.name))
                 .map(prompt => ({ value: prompt.name, label: prompt.name }))
               }
               value={selectedPromptToAdd}
@@ -383,7 +398,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
 
           {/* Draggable Prompts List */}
           <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
-            {formData.prompts.length > 0 ? (
+            {formData.prompts && formData.prompts.length > 0 ? (
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -426,7 +441,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
                 <div key={tool.name} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Switch
                     size="sm"
-                    checked={formData.tools.includes(tool.name)}
+                    checked={formData.tools && formData.tools.includes(tool.name)}
                     onChange={() => handleToolToggle(tool.name)}
                   />
                   <div style={{ flex: 1 }}>
