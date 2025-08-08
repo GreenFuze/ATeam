@@ -139,29 +139,57 @@ def get_tool_prompt_for_agent(tool_names: List[str], tool_manager) -> str:
         tool = tool_manager.get_tool(tool_name)
         if not tool:
             continue
-            
+
+        # Derive module name from relative_path (e.g., 'agent_management.py' -> 'agent_management')
+        rel_path = tool.get('relative_path') or tool.get('file_path', '')
+        module_name = str(rel_path).rsplit('/', 1)[-1].rsplit('\\', 1)[-1].replace('.py', '')
+
         if tool['type'] == 'function':
-            # For functions, we need to get the actual function object
-            # This is a limitation - we need to access the actual tool implementation
-            # For now, we'll create a basic description
-            tools_info.append(f"Tool: {tool_name}\nDescription: {tool.get('description', 'No description provided.')}\nArguments: {tool.get('signature', '(...)')}")
+            # Use fully qualified name expected by executor: module.function
+            fq_name = f"{module_name}.{tool['name']}"
+            tools_info.append(
+                "\n".join([
+                    f"Tool: {fq_name}",
+                    f"Description: {tool.get('description', 'No description provided.')}",
+                    f"Arguments: {tool.get('signature', '(...)')}"
+                ])
+            )
         elif tool['type'] == 'class':
-            # For classes, describe the methods
+            # For classes, list fully qualified method names: module.Class.method
             class_name = tool['name']
             methods = tool.get('methods', [])
             if methods:
                 for method in methods:
                     method_name = method['name']
-                    full_name = f"{class_name}.{method_name}"
+                    fq_name = f"{module_name}.{class_name}.{method_name}"
                     description = method.get('description', 'No description provided.')
                     signature = method.get('signature', '(...)')
-                    tools_info.append(f"Tool: {full_name}\nDescription: {description}\nArguments: {signature}")
+                    tools_info.append(
+                        "\n".join([
+                            f"Tool: {fq_name}",
+                            f"Description: {description}",
+                            f"Arguments: {signature}"
+                        ])
+                    )
             else:
-                tools_info.append(f"Tool: {class_name}\nDescription: {tool.get('description', 'No description provided.')}\nArguments: (class with no public methods)")
+                # No public methods; still expose class name to hint capabilities
+                fq_name = f"{module_name}.{class_name}"
+                tools_info.append(
+                    "\n".join([
+                        f"Tool: {fq_name}",
+                        f"Description: {tool.get('description', 'No description provided.')}",
+                        "Arguments: (class with no public methods)"
+                    ])
+                )
         else:
             raise ValueError(f"Unknown tool type: {tool['type']} for tool {tool_name}")
     
     if not tools_info:
         return ""
     
-    return "Available tools:\n\n" + "\n\n".join(tools_info) 
+    header = (
+        "Available tools (use the Tool name exactly when calling a tool):\n"
+        "- Functions: module.function\n"
+        "- Class methods: module.Class.method\n\n"
+    )
+    return header + "\n\n".join(tools_info)
