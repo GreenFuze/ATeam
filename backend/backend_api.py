@@ -37,6 +37,8 @@ class BackendAPI:
         try:
             while True:
                 data = await websocket.receive_text()
+                # Log full raw JSON received from frontend
+                logger.info(f"📥 [Backend] Raw inbound JSON from {connection_id}: {data}")
                 message = json.loads(data)
                 
                 # Route message based on type
@@ -90,6 +92,20 @@ class BackendAPI:
                     await self.handle_update_model(data_payload)
                 elif message_type == "get_schemas":
                     await self.handle_get_schemas()
+                elif message_type == "save_conversation":
+                    await self.handle_save_conversation(agent_id, session_id)
+                elif message_type == "list_conversations":
+                    await self.handle_list_conversations(agent_id)
+                elif message_type == "load_conversation":
+                    await self.handle_load_conversation(agent_id, data_payload.get("session_id"))
+                elif message_type == "get_embedding_models":
+                    await self.handle_get_embedding_models()
+                elif message_type == "get_embedding_settings":
+                    await self.handle_get_embedding_settings()
+                elif message_type == "update_embedding_settings":
+                    await self.handle_update_embedding_settings(data_payload)
+                elif message_type == "summarize_request":
+                    await self.handle_summarize_request(agent_id, session_id, data_payload)
                 else:
                     raise ValueError(f"Unknown message type: {message_type}")
                     
@@ -339,3 +355,183 @@ class BackendAPI:
             logger.error(f"Traceback: {traceback.format_exc()}")
             # FAIL-FAST: Re-raise the exception instead of fallback
             raise 
+
+    # ===== Embedding settings =====
+    async def handle_get_embedding_models(self):
+        try:
+            from objects_registry import models_manager
+            embs = models_manager().get_embedding_models()
+            data = [m.model_dump() for m in embs]
+            await frontend_api().send_model_update({"embedding_models": data})
+        except Exception as e:
+            logger.error(f"Error getting embedding models: {e}")
+            raise
+
+    async def handle_get_embedding_settings(self):
+        try:
+            from objects_registry import embedding_manager
+            mgr = embedding_manager()
+            # Read individually to respect fail-fast (catch missing separately)
+            try:
+                selected = mgr.get_selected_embedding_model()
+            except Exception:
+                selected = None
+            try:
+                chunk = mgr.get_max_chunk_size()
+            except Exception:
+                chunk = None
+            await frontend_api().send_model_update({"embedding_settings": {"selected_model": selected, "max_chunk_size": chunk}})
+        except Exception as e:
+            logger.error(f"Error getting embedding settings: {e}")
+            raise
+
+    async def handle_update_embedding_settings(self, data: Dict[str, Any]):
+        try:
+            from objects_registry import embedding_manager
+            mgr = embedding_manager()
+            selected = data.get("selected_model")
+            max_chunk = data.get("max_chunk_size")
+            if selected is None or max_chunk is None:
+                raise ValueError("Both selected_model and max_chunk_size are required")
+            mgr.set_selected_embedding_model(str(selected))
+            mgr.set_max_chunk_size(int(max_chunk))
+            await frontend_api().send_notification("success", "Embedding settings saved")
+            # Echo settings back
+            await self.handle_get_embedding_settings()
+        except Exception as e:
+            logger.error(f"Error updating embedding settings: {e}")
+            raise
+
+    # ===== Conversation persistence handlers =====
+    async def handle_save_conversation(self, agent_id: str, session_id: str):
+        try:
+            path = agent_manager().save_conversation(agent_id, session_id)
+            await frontend_api().send_notification("success", f"Conversation saved: {path}")
+        except Exception as e:
+            logger.error(f"Error saving conversation for {agent_id}/{session_id}: {e}")
+            raise
+
+    async def handle_list_conversations(self, agent_id: str):
+        try:
+            sessions = agent_manager().list_conversations(agent_id)
+            # Send to frontend
+            message = {
+                "type": "conversation_list",
+                "message_id": f"msg_{datetime.now().timestamp()}",
+                "timestamp": datetime.now().isoformat(),
+                "agent_id": agent_id,
+                "data": {"sessions": sessions},
+            }
+            await frontend_api().send_to_agent(agent_id, message)
+        except Exception as e:
+            logger.error(f"Error listing conversations for {agent_id}: {e}")
+            raise
+
+    async def handle_load_conversation(self, agent_id: str, session_id: str):
+        try:
+            snapshot = agent_manager().load_conversation(agent_id, session_id)
+            # After loading, send a conversation snapshot and a session switch
+            # Send session_created to switch session on UI
+            await frontend_api().send_session_created(agent_id, snapshot["session_id"])
+            # Send full snapshot
+            message = {
+                "type": "conversation_snapshot",
+                "message_id": f"msg_{datetime.now().timestamp()}",
+                "timestamp": datetime.now().isoformat(),
+                "agent_id": agent_id,
+                "data": snapshot,
+            }
+            await frontend_api().send_to_agent(agent_id, message)
+        except Exception as e:
+            logger.error(f"Error loading conversation for {agent_id}/{session_id}: {e}")
+            raise
+
+    # ===== Summarization =====
+    async def handle_summarize_request(self, agent_id: str, session_id: str, data: Dict[str, Any]):
+        try:
+            from objects_registry import agent_manager as _am, prompt_manager as _pm
+            percent = data.get("percentage")
+            if percent is None:
+                raise ValueError("percentage is required")
+            if not isinstance(percent, (int, float)) or percent < 0 or percent > 100:
+                raise ValueError("percentage must be a number between 0 and 100")
+
+            agent = _am().get_agent_by_session(session_id)
+            # Count only non-system/non-seed conversation messages
+            convo_msgs = [m for m in agent.messages if m.message_type.value != "SYSTEM"]
+            N = int((percent / 100.0) * len(convo_msgs))
+            if N <= 0:
+                await frontend_api().send_notification("warning", "Nothing to summarize for the selected percentage")
+                return
+
+            # Build temporary context: system prompt + seed + first N convo messages
+            from schemas import MessageType, Message
+            temp_parts: list[str] = []
+            if agent.full_system_prompt:
+                temp_parts.append(f"System: {agent.full_system_prompt}")
+            for seed in agent.seed_messages:
+                role = seed.role.capitalize()
+                temp_parts.append(f"{role}: {seed.content}")
+            for m in convo_msgs[:N]:
+                prefix = "User" if m.message_type == MessageType.CHAT_RESPONSE else "Assistant"
+                temp_parts.append(f"{prefix}: {m.content}")
+            # Append summarization instruction from prompt
+            summary_prompt = _pm().get_prompt_content("summary_request.md")
+            if not summary_prompt:
+                raise RuntimeError("summary_request.md prompt not found")
+            temp_context = "\n\n".join(temp_parts + [f"User: {summary_prompt}"])
+
+            # Call model to summarize
+            result_text = agent.model.prompt(temp_context).text()
+
+            # Replace first N messages in real conversation with a single summary message
+            # Map back to original indices to preserve system/seed
+            def find_indices_to_replace() -> list[int]:
+                idxs = []
+                seen = 0
+                for i, m in enumerate(agent.messages):
+                    if m.message_type.value != "SYSTEM":
+                        if seen < N:
+                            idxs.append(i)
+                            seen += 1
+                        else:
+                            break
+                return idxs
+            replace_idxs = find_indices_to_replace()
+            if not replace_idxs:
+                await frontend_api().send_notification("warning", "No eligible messages to summarize")
+                return
+            # Remove those messages and insert one summary
+            first_idx = replace_idxs[0]
+            # Pop from end to start
+            for i in sorted(replace_idxs, reverse=True):
+                agent.messages.pop(i)
+            from schemas import Message as _Msg
+            from datetime import datetime as _dt
+            import uuid as _uuid
+            agent.messages.insert(first_idx, _Msg(
+                id=str(_uuid.uuid4()),
+                agent_id=agent.config.id,
+                content=result_text,
+                message_type=MessageType.CHAT_RESPONSE,
+                timestamp=_dt.now().isoformat(),
+            ))
+
+            # Recompute context usage and send updates
+            try:
+                context_usage = agent._calculate_context_usage()
+                await frontend_api().send_context_update(agent.config.id, context_usage)
+            except Exception:
+                pass
+
+            # Send full snapshot
+            messages_dump = [m.model_dump() for m in agent.messages]
+            await frontend_api().send_conversation_snapshot(agent.config.id, {"session_id": session_id, "messages": messages_dump})
+            # Observability: log summarize inputs and outcome
+            try:
+                logger.info(f"Summarize: agent={agent_id} percent={percent} N={N} new_msgs={len(agent.messages)}")
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"Error summarizing conversation for {agent_id}/{session_id}: {e}")
+            raise

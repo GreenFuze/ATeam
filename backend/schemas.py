@@ -5,13 +5,14 @@ import json
 
 class MessageType(str, Enum):
     CHAT_RESPONSE = "CHAT_RESPONSE"
-    USE_TOOL = "USE_TOOL"
+    TOOL_CALL = "TOOL_CALL"
     TOOL_RETURN = "TOOL_RETURN"
     AGENT_CALL = "AGENT_CALL"
     AGENT_RETURN = "AGENT_RETURN"
     AGENT_DELEGATE = "AGENT_DELEGATE"
     REFINEMENT_RESPONSE = "REFINEMENT_RESPONSE"
     SYSTEM = "SYSTEM"
+    ERROR = "ERROR"
 
 class MessageIcon(str, Enum):
     CHAT = "chat"
@@ -38,7 +39,7 @@ class ChatResponse(StructuredResponse):
     icon: Optional[MessageIcon] = None
 
 class ToolCallResponse(StructuredResponse):
-    action: str = Field(default="USE_TOOL")
+    action: str = Field(default="TOOL_CALL")
     tool: str
     args: Dict[str, Any]
 
@@ -118,6 +119,7 @@ class PromptConfig(BaseModel):
     name: str
     content: str
     type: PromptType = PromptType.SYSTEM
+    default: bool = False
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

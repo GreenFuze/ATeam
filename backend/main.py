@@ -1,6 +1,7 @@
 import os
 from fastapi.websockets import WebSocketState
 import uvicorn
+import logging
 import traceback
 import asyncio
 from contextlib import asynccontextmanager
@@ -23,7 +24,21 @@ from backend_api import BackendAPI
 from monitoring import monitor_performance, performance_monitor, error_tracker
 from notification_utils import log_error, log_warning, log_info
 
-# Initialize global managers
+# Configure logging to overwrite ateam.log on every start
+log_file_path = os.path.join(backend_dir, 'ateam.log')
+logger = logging.getLogger()
+for h in list(logger.handlers):
+    logger.removeHandler(h)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file_path, mode='w', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+
+# Initialize global managers after logging is configured
 initialize_managers()
 
 # Initialize BackendAPI

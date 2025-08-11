@@ -12,6 +12,13 @@ from schema_manager import SchemaManager
 from notification_manager import NotificationManager
 from frontend_api import FrontendAPI
 
+# New managers
+# Lazy import types to avoid circular import during module import
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from embedding_manager import EmbeddingManager
+    from kb_manager import KBManager
+
 # Global manager instances
 _agent_manager: AgentManager | None = None
 _tool_manager: ToolManager | None = None
@@ -21,10 +28,12 @@ _models_manager: ModelsManager | None = None
 _schema_manager: SchemaManager | None = None
 _notification_manager: NotificationManager | None = None
 _frontend_api: FrontendAPI | None = None
+_embedding_manager = None  # type: ignore[assignment]
+_kb_manager = None  # type: ignore[assignment]
 
 def initialize_managers():
     """Initialize all global manager instances"""
-    global _agent_manager, _tool_manager, _prompt_manager, _provider_manager, _models_manager, _schema_manager, _notification_manager, _frontend_api
+    global _agent_manager, _tool_manager, _prompt_manager, _provider_manager, _models_manager, _schema_manager, _notification_manager, _frontend_api, _embedding_manager, _kb_manager
     
     # Initialize managers in dependency order
     _tool_manager = ToolManager("tools")
@@ -35,6 +44,11 @@ def initialize_managers():
     _schema_manager = SchemaManager("schemas")
     _notification_manager = NotificationManager()
     _frontend_api = FrontendAPI()
+    # Import lazily to avoid circular import errors
+    from embedding_manager import EmbeddingManager as _EM
+    from kb_manager import KBManager as _KM
+    _embedding_manager = _EM("embedding.yaml")
+    _kb_manager = _KM(base_dir="knowledgebase")
 
 def get_agent_manager() -> AgentManager:
     """Get the global agent manager instance"""
@@ -84,6 +98,16 @@ def get_frontend_api() -> FrontendAPI:
         raise RuntimeError("Managers not initialized. Call initialize_managers() first.")
     return _frontend_api
 
+def get_embedding_manager():
+    if _embedding_manager is None:
+        raise RuntimeError("Managers not initialized. Call initialize_managers() first.")
+    return _embedding_manager
+
+def get_kb_manager():
+    if _kb_manager is None:
+        raise RuntimeError("Managers not initialized. Call initialize_managers() first.")
+    return _kb_manager
+
 # Convenience aliases for direct use - always get current instances
 agent_manager = get_agent_manager
 tool_manager = get_tool_manager
@@ -93,3 +117,5 @@ models_manager = get_models_manager
 schema_manager = get_schema_manager
 notification_manager = get_notification_manager
 frontend_api = get_frontend_api 
+embedding_manager = get_embedding_manager
+kb_manager = get_kb_manager

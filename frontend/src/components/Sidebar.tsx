@@ -261,6 +261,13 @@ const Sidebar: React.FC<SidebarProps> = ({
                 onClick={() => handleNavigation('/settings?tab=tools')}
                 className="text-dark-primary hover:bg-dark-7"
               />
+                <NavLink
+                  label="Embedding"
+                  leftSection={<IconBrain size={16} />}
+                  active={location.pathname === '/settings' && location.search.includes('tab=embedding')}
+                  onClick={() => handleNavigation('/settings?tab=embedding')}
+                  className="text-dark-primary hover:bg-dark-7"
+                />
               <NavLink
                 label="Models"
                 leftSection={<IconCpu size={16} />}

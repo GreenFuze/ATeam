@@ -8,7 +8,7 @@ import {
   IconDotsVertical, IconFileText, IconMarkdown,
   IconQuestionMark, IconSettings, IconEdit,
   IconCode, IconTools, IconArrowsRightLeft,
-  IconUsers, IconArrowUpRight
+  IconUsers, IconArrowUpRight, IconAlertTriangle
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { Message, MessageType } from '../types';
@@ -47,7 +47,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
 
   const getMessageIcon = (messageType: MessageType) => {
     switch (messageType) {
-      case MessageType.USE_TOOL:
+      case MessageType.TOOL_CALL:
       case MessageType.TOOL_RETURN:
         return <IconTool size={16} />;
       case MessageType.AGENT_CALL:
@@ -60,6 +60,8 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
         return <IconBrain size={16} />;
       case MessageType.REFINEMENT_RESPONSE:
         return <IconEdit size={16} />;
+      case MessageType.ERROR:
+        return <IconAlertTriangle size={16} />;
       default:
         return <IconQuestionMark size={16} />;
     }
@@ -71,7 +73,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
     switch (action) {
       case 'CHAT_RESPONSE':
         return <IconMessage size={14} />;
-      case 'USE_TOOL':
+      case 'TOOL_CALL':
         return <IconTools size={14} />;
       case 'AGENT_CALL':
         return <IconUsers size={14} />;
@@ -88,7 +90,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
 
   const getMessageIconTooltip = (messageType: MessageType) => {
     switch (messageType) {
-      case MessageType.USE_TOOL:
+      case MessageType.TOOL_CALL:
         return 'Tool Usage';
       case MessageType.TOOL_RETURN:
         return 'Tool Result';
@@ -104,6 +106,8 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
         return 'Chat Response';
       case MessageType.REFINEMENT_RESPONSE:
         return 'Refinement Response';
+      case MessageType.ERROR:
+        return 'Error';
       default:
         return `Unknown message type: ${messageType}`;
     }
@@ -111,13 +115,15 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
 
   const getMessageColor = (messageType: MessageType) => {
     switch (messageType) {
-      case MessageType.USE_TOOL:
+      case MessageType.TOOL_CALL:
       case MessageType.TOOL_RETURN:
         return 'yellow';
       case MessageType.AGENT_CALL:
       case MessageType.AGENT_RETURN:
       case MessageType.AGENT_DELEGATE:
         return 'purple';
+      case MessageType.ERROR:
+        return 'red';
       case MessageType.SYSTEM:
         return 'gray';
       case MessageType.CHAT_RESPONSE:
@@ -291,23 +297,32 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
 
   const isUserMessage = message.agent_id === 'user';
 
+  const isSystemMessage = message.message_type === MessageType.SYSTEM;
+  // Use a subtle warm brown for system prompts (distinct from errors)
+  const paperBg = isUserMessage
+    ? 'var(--mantine-color-blue-9)'
+    : isSystemMessage
+      ? '#3a2f2a'
+      : 'var(--mantine-color-dark-6)';
+  const paperBorder = isUserMessage
+    ? 'var(--mantine-color-blue-6)'
+    : isSystemMessage
+      ? '#5a4a42'
+      : 'var(--mantine-color-dark-4)';
+
   return (
     <Paper
       p="md"
       withBorder
       style={{
-        backgroundColor: isUserMessage 
-          ? 'var(--mantine-color-blue-9)' 
-          : 'var(--mantine-color-dark-6)',
-        borderColor: isUserMessage 
-          ? 'var(--mantine-color-blue-6)' 
-          : 'var(--mantine-color-dark-4)',
+        backgroundColor: paperBg,
+        borderColor: paperBorder,
         color: 'var(--mantine-color-white)'
       }}
       onMouseEnter={() => setShowOptions(true)}
       onMouseLeave={() => setShowOptions(false)}
     >
-      <Group justify="space-between" align="flex-start" mb="sm">
+      <Group justify="space-between" align="flex-start" mb="sm" wrap="nowrap" style={{ alignItems: 'flex-start' }}>
         <Group gap="sm">
           <Group gap="xs">
             <Tooltip label={isUserMessage ? 'User response' : getMessageIconTooltip(message.message_type)}>
@@ -344,10 +359,10 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
           )}
         </Group>
 
-        {showOptions && (
+        <Box style={{ width: 28, display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>
           <Menu shadow="md" width={200}>
             <Menu.Target>
-              <ActionIcon size="sm" variant="subtle">
+              <ActionIcon size="sm" variant="subtle" style={{ visibility: showOptions ? 'visible' : 'hidden' }}>
                 <IconDotsVertical size={14} />
               </ActionIcon>
             </Menu.Target>
@@ -415,7 +430,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
               )}
             </Menu.Dropdown>
           </Menu>
-        )}
+        </Box>
       </Group>
 
       <Box>

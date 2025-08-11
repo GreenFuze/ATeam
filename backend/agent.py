@@ -5,12 +5,15 @@ Uses llm package for model loading and prompting, manages conversation history m
 
 import os
 import json
+import logging
 import uuid
+import threading
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
 
 import llm
+import schemas as schemas_module
 from schemas import (
     AgentConfig, Message, MessageType, MessageIcon, LLMResponse, AgentInfo, 
     ConversationData, SeedMessage,
@@ -18,6 +21,8 @@ from schemas import (
     AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, RefinementResponse
 )
 from notification_utils import log_error, log_warning, log_info
+
+logger = logging.getLogger(__name__)
 
 
 class Agent:
@@ -33,6 +38,7 @@ class Agent:
         self.system_prompt = ""  # Single combined system prompt
         self.seed_messages: List[SeedMessage] = []  # List of seed messages
         self.model = None  # LLM model instance
+        self._lock = threading.RLock()
         
         # Load prompts and initialize conversation
         self._load_prompts()
@@ -98,6 +104,8 @@ class Agent:
                 context_parts.append(f"User: {message.content}")
             elif message.message_type == MessageType.SYSTEM:
                 context_parts.append(f"System: {message.content}")
+            elif message.message_type == MessageType.TOOL_CALL:
+                context_parts.append(f"Tool Call: {message.content}")
             elif message.message_type == MessageType.TOOL_RETURN:
                 context_parts.append(f"Tool Result: {message.content}")
             elif message.message_type == MessageType.AGENT_RETURN:
@@ -106,6 +114,8 @@ class Agent:
                 context_parts.append(f"Agent Call: {message.content}")
             elif message.message_type == MessageType.AGENT_DELEGATE:
                 context_parts.append(f"Agent Delegate: {message.content}")
+            elif message.message_type == MessageType.ERROR:
+                context_parts.append(f"Error: {message.content}")
             else:
                 raise ValueError(f"Unknown message type in conversation history: {message.message_type}")
             
@@ -154,7 +164,7 @@ class Agent:
             except Exception:
                 pass
             prompt_parts.append(action_policy + "\n" + tools_prompts)
-        
+
         return "\n\n".join(prompt_parts)
 
     def _build_conversation_context(self, user_message: str) -> str:
@@ -180,11 +190,31 @@ class Agent:
     def _parse_llm_response(self, response_text: str) -> StructuredResponseType:
         """Parse LLM response into structured format"""
         try:
+            # Sanitize common inline comment artifacts the model may emit
+            # Example: "reasoning": "", <-- tool doesn't have reasoning
+            import re
+            sanitized = "\n".join(
+                re.sub(r"\s*,?\s*<--.*$", "", line) for line in response_text.splitlines()
+            )
+            # Remove trailing commas before object/array closers
+            sanitized = re.sub(r",\s*([}\]])", r"\1", sanitized)
+            # Trim whitespace
+            sanitized = sanitized.strip()
             # Try to parse as JSON
-            response_data = json.loads(response_text.strip())
+            response_data = json.loads(sanitized.strip())
             
             # Validate and create appropriate response object
             action = response_data.get("action", "")
+            
+            # Helper: coerce success fields to "True"/"False" strings
+            def coerce_success(val: Any, default: str = "False") -> str:
+                if isinstance(val, bool):
+                    return "True" if val else "False"
+                if isinstance(val, str):
+                    if val.lower() in ("true", "false"):
+                        return "True" if val.lower() == "true" else "False"
+                    return val
+                return default
             
             if action == "CHAT_RESPONSE":
                 return ChatResponse(
@@ -192,9 +222,9 @@ class Agent:
                     reasoning=response_data.get("reasoning", ""),
                     content=response_data.get("content", "")
                 )
-            elif action == "TOOL_CALL":
+            elif action  == "TOOL_CALL":
                 return ToolCallResponse(
-                    action=action,
+                    action="TOOL_CALL",
                     reasoning=response_data.get("reasoning", ""),
                     tool=response_data.get("tool", ""),
                     args=response_data.get("args", {})
@@ -204,7 +234,7 @@ class Agent:
                     action=action,
                     tool=response_data.get("tool", ""),
                     result=response_data.get("result", ""),
-                    success=response_data.get("success", "False")
+                    success=coerce_success(response_data.get("success", "False"))
                 )
             elif action == "AGENT_DELEGATE":
                 return AgentDelegateResponse(
@@ -223,13 +253,30 @@ class Agent:
                     user_input=response_data.get("user_input", "")
                 )
             elif action == "AGENT_RETURN":
-                return AgentReturnResponse(
-                    action=action,
-                    reasoning=response_data.get("reasoning", ""),
-                    agent=response_data.get("agent", ""),
-                    returning_agent=response_data.get("returning_agent", ""),
-                    success=response_data.get("success", "False")
-                )
+                # If the 'agent' field actually names a known tool,
+                # coerce into a ToolReturnResponse to avoid misclassification
+                try:
+                    from objects_registry import tool_manager
+                    agent_field = response_data.get("agent", "")
+                    tool_entry = tool_manager().get_tool(agent_field)
+                except Exception:
+                    tool_entry = None
+
+                if tool_entry is not None:
+                    return ToolReturnResponse(
+                        action="TOOL_RETURN",
+                        tool=agent_field,
+                        result=response_data.get("result", ""),
+                        success=coerce_success(response_data.get("success", "False"))
+                    )
+                else:
+                    return AgentReturnResponse(
+                        action=action,
+                        reasoning=response_data.get("reasoning", ""),
+                        agent=response_data.get("agent", ""),
+                        returning_agent=response_data.get("returning_agent", ""),
+                        success=coerce_success(response_data.get("success", "False"))
+                    )
             elif action == "REFINEMENT_RESPONSE":
                 return RefinementResponse(
                     action=action,
@@ -241,7 +288,18 @@ class Agent:
                     success=response_data.get("success", False)
                 )
             else:
-                raise ValueError(f"Unknown action type: {action}")
+                # Unknown action. Build a structured error response that includes valid actions.
+                # Dynamically derive valid actions by inspecting schema models that define a default 'action' field.
+                valid_actions_set = set()
+                for name, obj in vars(schemas_module).items():
+                    if isinstance(obj, type) and hasattr(obj, 'model_fields'):
+                        fields = getattr(obj, 'model_fields', {})
+                        if isinstance(fields, dict) and 'action' in fields:
+                            default_val = getattr(fields['action'], 'default', None)
+                            if isinstance(default_val, str) and default_val:
+                                valid_actions_set.add(default_val)
+                valid_actions = sorted(valid_actions_set)
+                raise ValueError(f"Unknown action type: {action}. Valid actions are: {', '.join(valid_actions)}")
                 
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON response from LLM: {str(e)}")
@@ -287,10 +345,32 @@ class Agent:
         """Handle tool call - execute tool and continue conversation"""
         # Lazy import to avoid circular dependency
         from tool_executor import run_tool
+        from objects_registry import frontend_api
         
-        # Execute the tool
-        tool_result = run_tool(response.tool, response.args)
+        # Execute the tool (inject caller_agent_id for authorization in kb_manager)
+        args_with_caller = dict(response.args or {})
+        args_with_caller.setdefault("caller_agent_id", self.config.id)
+        tool_result = run_tool(response.tool, args_with_caller)
         
+        # Emit a TOOL_CALL message to frontend immediately (fail-fast)
+        await frontend_api().send_agent_response(
+            self.config.id,
+            LLMResponse(
+                content=f"Calling tool {response.tool}",
+                message_type=MessageType.TOOL_CALL,
+                metadata={
+                    "model": self.config.model,
+                    "agent_id": self.config.id,
+                    "action": "TOOL_CALL",
+                    "tool": response.tool,
+                    "args": response.args,
+                },
+                action="TOOL_CALL",
+                tool_name=response.tool,
+                tool_parameters=response.args,
+            ),
+        )
+
         # Add tool result to conversation
         tool_message = Message(
             id=str(uuid.uuid4()),
@@ -303,10 +383,36 @@ class Agent:
             action=tool_result.action,
             reasoning=""
         )
-        self.messages.append(tool_message)
+        with self._lock:
+            self.messages.append(tool_message)
+
+        # Emit TOOL_RETURN to frontend as a separate message (fail-fast)
+        await frontend_api().send_agent_response(
+            self.config.id,
+            LLMResponse(
+                content=tool_result.result,
+                message_type=MessageType.TOOL_RETURN,
+                metadata={
+                    "model": self.config.model,
+                    "agent_id": self.config.id,
+                    "action": "TOOL_RETURN",
+                    "tool": response.tool,
+                    "success": "True",
+                },
+                action="TOOL_RETURN",
+                tool_name=response.tool,
+            ),
+        )
         
         # Continue conversation with tool result
-        return await self.get_response(f"Tool {response.tool} returned: {tool_result.result}")
+        inner_response = await self.get_response(f"Tool {response.tool} returned: {tool_result.result}")
+        # Mark as already sent to frontend by the inner call to avoid duplicate send in outer get_response
+        try:
+            inner_response.metadata = inner_response.metadata or {}
+            inner_response.metadata["already_sent"] = True
+        except Exception:
+            pass
+        return inner_response
     
     def _handle_tool_return(self, response: ToolReturnResponse) -> LLMResponse:
         """Handle tool return - this should not happen in normal flow"""
@@ -325,7 +431,48 @@ class Agent:
         )
     
     def _handle_agent_delegate(self, response: AgentDelegateResponse) -> LLMResponse:
-        """Handle agent delegation - delegate to another agent"""
+        """Handle agent delegation - delegate to another agent or fail if not found"""
+        from objects_registry import agent_manager, frontend_api
+
+        target = response.agent
+        exists = False
+        try:
+            try:
+                agent_manager().get_agent_config(target)
+                exists = True
+            except Exception:
+                exists = agent_manager().get_agent_by_name(target) is not None
+        except Exception:
+            exists = False
+
+        if not exists:
+            failure_reason = f"agent {target} doesn't exist"
+            failure_response = LLMResponse(
+                content=failure_reason,
+                message_type=MessageType.AGENT_RETURN,
+                metadata={
+                    "model": self.config.model,
+                    "agent_id": self.config.id,
+                    "action": "AGENT_RETURN",
+                    "reasoning": failure_reason,
+                    "returning_agent": self.config.id,
+                    "target_agent_id": target,
+                    "success": "False",
+                },
+                action="AGENT_RETURN",
+                reasoning=failure_reason,
+            )
+            try:
+                import asyncio
+                coro = frontend_api().send_agent_response(self.config.id, failure_response)
+                if asyncio.get_event_loop().is_running():
+                    asyncio.create_task(coro)
+                else:
+                    asyncio.run(coro)
+            except Exception:
+                pass
+            return failure_response
+
         return LLMResponse(
             content=f"Delegating to agent {response.agent}",
             message_type=MessageType.AGENT_DELEGATE,
@@ -344,7 +491,48 @@ class Agent:
         )
     
     def _handle_agent_call(self, response: AgentCallResponse) -> LLMResponse:
-        """Handle agent call - call another agent and wait for response"""
+        """Handle agent call - verify agent exists, otherwise return failure"""
+        from objects_registry import agent_manager, frontend_api
+
+        target = response.agent
+        exists = False
+        try:
+            try:
+                agent_manager().get_agent_config(target)
+                exists = True
+            except Exception:
+                exists = agent_manager().get_agent_by_name(target) is not None
+        except Exception:
+            exists = False
+
+        if not exists:
+            failure_reason = f"agent {target} doesn't exist"
+            failure_response = LLMResponse(
+                content=failure_reason,
+                message_type=MessageType.AGENT_RETURN,
+                metadata={
+                    "model": self.config.model,
+                    "agent_id": self.config.id,
+                    "action": "AGENT_RETURN",
+                    "reasoning": failure_reason,
+                    "returning_agent": self.config.id,
+                    "target_agent_id": target,
+                    "success": "False",
+                },
+                action="AGENT_RETURN",
+                reasoning=failure_reason,
+            )
+            try:
+                import asyncio
+                coro = frontend_api().send_agent_response(self.config.id, failure_response)
+                if asyncio.get_event_loop().is_running():
+                    asyncio.create_task(coro)
+                else:
+                    asyncio.run(coro)
+            except Exception:
+                pass
+            return failure_response
+
         return LLMResponse(
             content=f"Calling agent {response.agent}",
             message_type=MessageType.AGENT_CALL,
@@ -405,8 +593,9 @@ class Agent:
         
         # Get total conversation length in characters
         total_content = ""
-        for message in self.messages:
-            total_content += message.content + " "
+        with self._lock:
+            for message in self.messages:
+                total_content += message.content + " "
         
         # Add system prompts and tools to context calculation
         total_content += self._build_conversation_context("")
@@ -449,35 +638,81 @@ class Agent:
             message_type=MessageType.CHAT_RESPONSE,
             timestamp=datetime.now().isoformat()
         )
-        self.messages.append(user_message)
+        with self._lock:
+            self.messages.append(user_message)
         
         # Build complete conversation context
         context = self._build_conversation_context(message)
         
         # Response format instructions are already included in system prompt during agent initialization
         
-        # Get response from LLM
+        # Get response from LLM (stream if supported)
         try:
-            response = self.model.prompt(context)
-            response_text = response.text()
-            print(f"🔍 DEBUG: Raw LLM response: {response_text}")
+            response = self.model.prompt(context, stream=True)
+            streamed_text_parts: list[str] = []
+            try:
+                # If response is iterable/generator, stream chunks
+                from objects_registry import frontend_api
+                announced_action = False
+                for chunk in response:
+                    if not chunk:
+                        continue
+                    text_piece = getattr(chunk, 'text', None)
+                    text_piece = text_piece() if callable(text_piece) else (text_piece if isinstance(text_piece, str) else str(chunk))
+                    if text_piece:
+                        streamed_text_parts.append(text_piece)
+                        # Try to detect action early from accumulated JSON buffer
+                        if not announced_action:
+                            buf = "".join(streamed_text_parts)
+                            # Fast-path: look for \"action\": \"...\"
+                            import re
+                            m = re.search(r"\"action\"\s*:\s*\"([A-Z_]+)\"", buf)
+                            if m:
+                                announced_action = True
+                                await frontend_api().send_agent_stream_start(self.config.id, m.group(1))
+                        # send delta to frontend
+                        await frontend_api().send_agent_stream(self.config.id, text_piece)
+                response_text = "".join(streamed_text_parts) if streamed_text_parts else ""
+                if not response_text:
+                    # Fallback if nothing streamed
+                    response_text = response.text()
+            except TypeError:
+                # Stream not supported; fall back to full text
+                response_text = response.text()
+            logger.info(f"🔍 DEBUG: Raw LLM response: {response_text}")
         except Exception as e:
             raise RuntimeError(f"Error getting response from LLM: {str(e)}")
         
         # Parse structured response
         try:
             structured_response = self._parse_llm_response(response_text)
-            print(f"✅ DEBUG: Successfully parsed response with action: {structured_response.action}")
+            logger.info(f"✅ DEBUG: Successfully parsed response with action: {structured_response.action}")
         except ValueError as e:
-            print(f"❌ DEBUG: Failed to parse LLM response: {e}")
-            print(f"❌ DEBUG: Response text was: {response_text}")
-            # If parsing fails, treat as chat response with error icon
+            logger.error(f"❌ DEBUG: Failed to parse LLM response: {e}")
+            logger.error(f"❌ DEBUG: Response text was: {response_text}")
+            # If parsing fails OR illegal action, respond with an ERROR-flavored ChatResponse and send immediately to frontend
+            error_text = f"Error: The AI response could not be parsed properly.\n\nRaw response:\n{response_text}\n\nError details: {str(e)}"
+            if "Unknown action type" in str(e):
+                error_text = f"Error: Illegal action from LLM. {str(e)}"
             structured_response = ChatResponse(
                 action="CHAT_RESPONSE",
-                reasoning=f"Failed to parse structured response: {str(e)}",
-                content=f"Error: The AI response could not be parsed properly.\n\nRaw response:\n{response_text}\n\nError details: {str(e)}",
+                reasoning=f"{str(e)}",
+                content=error_text,
                 icon=MessageIcon.ERROR
             )
+            from objects_registry import frontend_api
+            await frontend_api().send_agent_response(self.config.id, LLMResponse(
+                content=error_text,
+                message_type=MessageType.ERROR,
+                metadata={
+                    "model": self.config.model,
+                    "agent_id": self.config.id,
+                    "action": "AGENT_RETURN",
+                    "error": str(e),
+                },
+                action="AGENT_RETURN",
+                reasoning=str(e),
+            ))
         
         # Handle the structured response
         llm_response = await self._handle_structured_response(structured_response)
@@ -487,7 +722,7 @@ class Agent:
             id=str(uuid.uuid4()),
             agent_id=self.config.id,
             content=llm_response.content,
-            message_type=llm_response.message_type,
+            message_type=(MessageType.ERROR if llm_response.icon == MessageIcon.ERROR else llm_response.message_type),
             timestamp=datetime.now().isoformat(),
             metadata=llm_response.metadata,
             action=llm_response.action,
@@ -496,8 +731,21 @@ class Agent:
             tool_parameters=llm_response.tool_parameters,
             target_agent_id=llm_response.target_agent_id
         )
-        self.messages.append(agent_message)
+        with self._lock:
+            self.messages.append(agent_message)
         
+        # If not a CHAT_RESPONSE, immediately continue the conversation so the LLM can react
+        if agent_message.message_type != MessageType.CHAT_RESPONSE:
+            try:
+                # Prompt the LLM to react to the latest non-chat message
+                follow_up = (
+                    f"System: You previously produced a {agent_message.message_type.value} with action='{agent_message.action}'. "
+                    f"Please continue with a valid next action in strict JSON (see system prompt)."
+                )
+                return await self.get_response(follow_up)
+            except Exception:
+                pass
+
         # Calculate context usage and send update
         try:
             context_usage = self._calculate_context_usage()
@@ -517,7 +765,8 @@ class Agent:
     
     def get_conversation_history(self) -> List[Message]:
         """Get the conversation history as Message objects"""
-        return self.messages.copy()
+        with self._lock:
+            return self.messages.copy()
     
     def save_conversation(self, session_id: str) -> None:
         """Save conversation to agent_history directory"""
@@ -567,7 +816,8 @@ class Agent:
         conversation_data = ConversationData.model_validate(conversation_data_dict)
         
         # Clear current messages
-        self.messages = []
+        with self._lock:
+            self.messages = []
         
         # Load messages from file using Pydantic
         for response_data in conversation_data.responses:

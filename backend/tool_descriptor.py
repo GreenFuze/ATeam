@@ -147,10 +147,12 @@ def get_tool_prompt_for_agent(tool_names: List[str], tool_manager) -> str:
         if tool['type'] == 'function':
             # Use fully qualified name expected by executor: module.function
             fq_name = f"{module_name}.{tool['name']}"
+            desc_full = tool.get('description', 'No description provided.') or 'No description provided.'
+            desc = (desc_full.strip().split('\n')[0]) if desc_full else 'No description provided.'
             tools_info.append(
                 "\n".join([
                     f"Tool: {fq_name}",
-                    f"Description: {tool.get('description', 'No description provided.')}",
+                    f"Description: {desc}",
                     f"Arguments: {tool.get('signature', '(...)')}"
                 ])
             )
@@ -162,7 +164,8 @@ def get_tool_prompt_for_agent(tool_names: List[str], tool_manager) -> str:
                 for method in methods:
                     method_name = method['name']
                     fq_name = f"{module_name}.{class_name}.{method_name}"
-                    description = method.get('description', 'No description provided.')
+                    desc_full = method.get('description', 'No description provided.') or 'No description provided.'
+                    description = (desc_full.strip().split('\n')[0]) if desc_full else 'No description provided.'
                     signature = method.get('signature', '(...)')
                     tools_info.append(
                         "\n".join([
@@ -177,7 +180,7 @@ def get_tool_prompt_for_agent(tool_names: List[str], tool_manager) -> str:
                 tools_info.append(
                     "\n".join([
                         f"Tool: {fq_name}",
-                        f"Description: {tool.get('description', 'No description provided.')}",
+                        f"Description: {(tool.get('description', 'No description provided.') or 'No description provided.').strip().split('\n')[0]}",
                         "Arguments: (class with no public methods)"
                     ])
                 )

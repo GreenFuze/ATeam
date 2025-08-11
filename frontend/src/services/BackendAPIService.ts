@@ -4,7 +4,7 @@
  */
 
 export interface BackendAPIMessage {
-  type: 'chat_message' | 'agent_refresh' | 'session_management' | 'register_agent' | 'get_agents' | 'create_agent' | 'update_agent' | 'delete_agent' | 'get_tools' | 'get_prompts' | 'get_providers' | 'get_models' | 'get_schemas' | 'update_settings' | 'update_provider' | 'update_model' | 'create_schema' | 'update_schema' | 'delete_schema' | 'update_prompt' | 'create_prompt' | 'delete_prompt' | 'get_monitoring_health' | 'get_monitoring_metrics' | 'get_monitoring_errors';
+  type: 'chat_message' | 'agent_refresh' | 'session_management' | 'register_agent' | 'get_agents' | 'create_agent' | 'update_agent' | 'delete_agent' | 'get_tools' | 'get_prompts' | 'get_providers' | 'get_models' | 'get_schemas' | 'update_settings' | 'update_provider' | 'update_model' | 'create_schema' | 'update_schema' | 'delete_schema' | 'update_prompt' | 'create_prompt' | 'delete_prompt' | 'get_monitoring_health' | 'get_monitoring_metrics' | 'get_monitoring_errors' | 'save_conversation' | 'list_conversations' | 'load_conversation' | 'get_embedding_models' | 'get_embedding_settings' | 'update_embedding_settings';
   message_id: string;
   timestamp: string;
   agent_id?: string;
@@ -251,6 +251,82 @@ export class BackendAPIService {
       message_id: this.generateMessageId(),
       timestamp: new Date().toISOString(),
       data: {}
+    };
+    this.sendMessage(message);
+  }
+
+  public sendSaveConversation(agentId: string, sessionId: string): void {
+    const message: BackendAPIMessage = {
+      type: 'save_conversation',
+      message_id: this.generateMessageId(),
+      timestamp: new Date().toISOString(),
+      agent_id: agentId,
+      session_id: sessionId,
+      data: {}
+    };
+    this.sendMessage(message);
+  }
+
+  public sendListConversations(agentId: string): void {
+    const message: BackendAPIMessage = {
+      type: 'list_conversations',
+      message_id: this.generateMessageId(),
+      timestamp: new Date().toISOString(),
+      agent_id: agentId,
+      data: {}
+    };
+    this.sendMessage(message);
+  }
+
+  public sendLoadConversation(agentId: string, sessionId: string): void {
+    const message: BackendAPIMessage = {
+      type: 'load_conversation',
+      message_id: this.generateMessageId(),
+      timestamp: new Date().toISOString(),
+      agent_id: agentId,
+      data: { session_id: sessionId }
+    };
+    this.sendMessage(message);
+  }
+
+  public sendSummarizeRequest(agentId: string, sessionId: string, percentage: number): void {
+    const message: BackendAPIMessage = {
+      type: 'summarize_request',
+      message_id: this.generateMessageId(),
+      timestamp: new Date().toISOString(),
+      agent_id: agentId,
+      session_id: sessionId,
+      data: { percentage }
+    } as any;
+    this.sendMessage(message);
+  }
+
+  public sendGetEmbeddingModels(): void {
+    const message: BackendAPIMessage = {
+      type: 'get_embedding_models',
+      message_id: this.generateMessageId(),
+      timestamp: new Date().toISOString(),
+      data: {}
+    };
+    this.sendMessage(message);
+  }
+
+  public sendGetEmbeddingSettings(): void {
+    const message: BackendAPIMessage = {
+      type: 'get_embedding_settings',
+      message_id: this.generateMessageId(),
+      timestamp: new Date().toISOString(),
+      data: {}
+    };
+    this.sendMessage(message);
+  }
+
+  public sendUpdateEmbeddingSettings(selected_model: string, max_chunk_size: number): void {
+    const message: BackendAPIMessage = {
+      type: 'update_embedding_settings',
+      message_id: this.generateMessageId(),
+      timestamp: new Date().toISOString(),
+      data: { selected_model, max_chunk_size }
     };
     this.sendMessage(message);
   }

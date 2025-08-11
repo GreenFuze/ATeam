@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { notifications } from '@mantine/notifications';
 import {
   Modal, Title, TextInput, Textarea, Select, NumberInput,
   Switch, Button, Group, Stack, Divider, Badge, ActionIcon, Card
@@ -31,7 +32,7 @@ interface SortablePromptItemProps {
   onRemove: (promptName: string) => void;
 }
 
-const SortablePromptItem: React.FC<SortablePromptItemProps> = ({ prompt, onRemove }) => {
+const SortablePromptItem: React.FC<SortablePromptItemProps & { disabled?: boolean; canRemove?: boolean; }> = ({ prompt, onRemove, disabled = false, canRemove = true }) => {
   const {
     attributes,
     listeners,
@@ -58,9 +59,8 @@ const SortablePromptItem: React.FC<SortablePromptItemProps> = ({ prompt, onRemov
           <ActionIcon
             variant="subtle"
             size="sm"
-            {...attributes}
-            {...listeners}
-            style={{ cursor: 'grab' }}
+            {...(disabled ? {} : { ...attributes, ...listeners })}
+            style={{ cursor: disabled ? 'not-allowed' : 'grab', opacity: disabled ? 0.4 : 1 }}
           >
             <IconGripVertical size={16} />
           </ActionIcon>
@@ -71,6 +71,7 @@ const SortablePromptItem: React.FC<SortablePromptItemProps> = ({ prompt, onRemov
             </div>
           </div>
         </Group>
+        {!canRemove ? null : (
         <ActionIcon
           variant="subtle"
           color="red"
@@ -79,6 +80,7 @@ const SortablePromptItem: React.FC<SortablePromptItemProps> = ({ prompt, onRemov
         >
           <IconX size={16} />
         </ActionIcon>
+        )}
       </Group>
     </Card>
   );
@@ -98,6 +100,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
   onSuccess
 }) => {
   const [loading, setLoading] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [models, setModels] = useState<any[]>([]);
   const [prompts, setPrompts] = useState<any[]>([]);
   const [tools, setTools] = useState<any[]>([]);
@@ -117,6 +120,11 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
   });
 
   const [selectedPromptToAdd, setSelectedPromptToAdd] = useState<string>('');
+  const mandatoryPrompt = 'all_agents.md';
+  const mandatoryTools = new Set([
+    'kb_add','kb_update','kb_get','kb_list','kb_search',
+    'plan_read','plan_write','plan_append','plan_delete','plan_list'
+  ]);
 
   const isEditing = !!agent;
 
@@ -137,8 +145,8 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
           name: agent.name,
           description: agent.description,
           model: agent.model,
-          prompts: agent.prompts,
-          tools: agent.tools,
+          prompts: (agent.prompts?.includes(mandatoryPrompt) ? agent.prompts : [mandatoryPrompt, ...(agent.prompts || [])]).filter((v, i, a) => a.indexOf(v) === i),
+          tools: Array.from(new Set([...(agent.tools || []), ...Array.from(mandatoryTools)])),
           schema_file: agent.schema_file,
           grammar_file: agent.grammar_file,
           temperature: agent.temperature,
@@ -152,8 +160,8 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
           name: '',
           description: '',
           model: '',
-          prompts: [],
-          tools: [],
+          prompts: [mandatoryPrompt],
+          tools: Array.from(mandatoryTools),
           schema_file: undefined,
           grammar_file: undefined,
           temperature: 0.7,
@@ -197,18 +205,39 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
 
   const handleSubmit = async () => {
     setLoading(true);
+    setSaveError(null);
     try {
       if (isEditing && agent) {
-        // Send agent update via WebSocket
-        connectionManager.sendUpdateAgent(agent.id, formData);
+        // Send agent update via WebSocket (must include immutable id)
+        const updatePayload: any = { ...formData, id: agent.id };
+        connectionManager.sendUpdateAgent(agent.id, updatePayload);
       } else {
-        // Send agent create via WebSocket
-        connectionManager.sendCreateAgent(formData);
+        // Create mode: generate deterministic id from name (frontend responsibility)
+        const base = (formData.name || '').trim().toLowerCase();
+        const generatedId = base
+          .replace(/[^a-z0-9]+/g, '-')     // non-alphanumeric → '-'
+          .replace(/^-+|-+$/g, '')         // trim leading/trailing '-'
+          .replace(/-{2,}/g, '-');         // collapse multiple '-'
+
+        if (!generatedId) {
+          throw new Error('Invalid agent name. Cannot generate agent id.');
+        }
+
+        const createPayload: any = { id: generatedId, ...formData };
+        connectionManager.sendCreateAgent(createPayload);
       }
       onSuccess();
       onClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save agent:', error);
+      const message = error?.message ? String(error.message) : 'Failed to save agent due to an unexpected error.';
+      setSaveError(message);
+      notifications.show({
+        color: 'red',
+        title: isEditing ? 'Update Agent Failed' : 'Create Agent Failed',
+        message,
+        withBorder: true,
+      });
     } finally {
       setLoading(false);
     }
@@ -247,6 +276,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
   };
 
   const handleRemovePrompt = (promptName: string) => {
+    if (promptName === mandatoryPrompt) return; // cannot remove mandatory
     setFormData(prev => ({
       ...prev,
       prompts: (prev.prompts || []).filter(p => p !== promptName)
@@ -256,7 +286,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
 
-    if (active.id !== over?.id) {
+    if (active.id !== over?.id && active.id !== mandatoryPrompt && over?.id !== mandatoryPrompt) {
       setFormData(prev => {
         const oldIndex = prev.prompts.indexOf(active.id as string);
         const newIndex = prev.prompts.indexOf(over?.id as string);
@@ -270,6 +300,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
   };
 
   const handleToolToggle = (toolName: string) => {
+    if (mandatoryTools.has(toolName)) return; // cannot toggle mandatory
     setFormData(prev => ({
       ...prev,
       tools: (prev.tools || []).includes(toolName)
@@ -287,6 +318,12 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
       closeOnClickOutside={false}
     >
       <Stack gap="md">
+        {saveError && (
+          <div style={{ background: 'rgba(255, 0, 0, 0.1)', border: '1px solid rgba(255,0,0,0.3)', padding: '8px 12px', borderRadius: 6 }}>
+            <div style={{ color: 'var(--mantine-color-red-6)', fontWeight: 600, marginBottom: 4 }}>Backend validation error</div>
+            <div style={{ color: 'var(--mantine-color-red-6)' }}>{saveError}</div>
+          </div>
+        )}
         {/* Basic Information */}
         <div>
           <Title order={4} mb="sm">Basic Information</Title>
@@ -380,6 +417,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
             <Select
               placeholder="Select a system prompt to add"
               data={prompts
+                .filter(prompt => prompt.name !== mandatoryPrompt)
                 .filter(prompt => !formData.prompts || !formData.prompts.includes(prompt.name))
                 .map(prompt => ({ value: prompt.name, label: prompt.name }))
               }
@@ -417,6 +455,8 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
                         key={promptName}
                         prompt={prompt}
                         onRemove={handleRemovePrompt}
+                        disabled={promptName === mandatoryPrompt}
+                        canRemove={promptName !== mandatoryPrompt}
                       />
                     );
                   })}
@@ -441,14 +481,18 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
                 <div key={tool.name} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <Switch
                     size="sm"
-                    checked={formData.tools && formData.tools.includes(tool.name)}
+                    checked={Boolean(formData.tools && formData.tools.includes(tool.name)) || mandatoryTools.has(tool.name)}
                     onChange={() => handleToolToggle(tool.name)}
+                    disabled={mandatoryTools.has(tool.name)}
                   />
                   <div style={{ flex: 1 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span style={{ fontWeight: 500 }}>{tool.name}</span>
                       {tool.is_provider_tool && (
                         <Badge size="xs" variant="light">PROVIDER</Badge>
+                      )}
+                      {mandatoryTools.has(tool.name) && (
+                        <Badge size="xs" color="blue" variant="light">MANDATORY</Badge>
                       )}
                     </div>
                     <div style={{ fontSize: '0.875rem', color: 'var(--mantine-color-dimmed)' }}>

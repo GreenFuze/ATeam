@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import {
+import { 
   Container, Title, Card, Text, Group, Button, Badge,
   TextInput, Textarea, Stack, Modal, Code,
-  Grid, Paper, Switch, Tooltip, NumberInput
+  Grid, Paper, Switch, Tooltip, NumberInput, Select, Notification
 } from '@mantine/core';
 import {
   IconTools, IconBrain, IconSettings, IconPlus,
@@ -25,6 +25,10 @@ const SettingsPage: React.FC = () => {
   const [providers, setProviders] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
   const [schemas, setSchemas] = useState<any[]>([]);
+  // Embedding settings state
+  const [embeddingModels, setEmbeddingModels] = useState<any[]>([]);
+  const [embeddingSelectedModel, setEmbeddingSelectedModel] = useState<string | null>(null);
+  const [embeddingMaxChunk, setEmbeddingMaxChunk] = useState<number | ''>('');
   const [loading, setLoading] = useState(false);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
 
@@ -186,17 +190,15 @@ const SettingsPage: React.FC = () => {
         setLoading(false);
       },
       onModelUpdate: (data: any) => {
-        console.log('Received model update:', data);
-        
-        // Assert that data is properly structured - if not, there's a backend bug
-        if (!data) {
-          throw new Error('Backend sent undefined data for model_update - this indicates a backend bug');
+        if (data.embedding_models) {
+          setEmbeddingModels(data.embedding_models);
         }
-        if (!data.models) {
-          throw new Error('Backend sent malformed model_update data - missing models array - this indicates a backend bug');
+        if (data.embedding_settings) {
+          const s = data.embedding_settings;
+          setEmbeddingSelectedModel(s.selected_model || null);
+          setEmbeddingMaxChunk(typeof s.max_chunk_size === 'number' ? s.max_chunk_size : '');
         }
-        
-        setModels(data.models);
+        if (data.models) setModels(data.models);
         setLoading(false);
       },
       onSchemaUpdate: (data: any) => {
@@ -222,6 +224,9 @@ const SettingsPage: React.FC = () => {
     connectionManager.sendGetProviders();
     connectionManager.sendGetModels();
     connectionManager.sendGetSchemas();
+    // Load embedding models/settings
+    connectionManager.sendGetEmbeddingModels();
+    connectionManager.sendGetEmbeddingSettings();
   }, []);
 
 
@@ -516,6 +521,55 @@ const SettingsPage: React.FC = () => {
               </Stack>
             </Card>
           )}
+        </Paper>
+      )}
+
+      {activeTab === 'embedding' && (
+        <Paper p="xl" radius="md">
+          <Group mb="xl">
+            <IconBrain size={24} />
+            <Title order={2}>Embedding Settings</Title>
+          </Group>
+
+          {(!embeddingSelectedModel || !embeddingMaxChunk) && (
+            <Notification color="yellow" title="Embedding not configured" withCloseButton={false} mb="md">
+              Please select an embedding model and max chunk size. These settings are required.
+            </Notification>
+          )}
+
+          <Grid>
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <Select
+                label="Embedding Model"
+                placeholder="Select an embedding model"
+                data={embeddingModels.map((m) => ({ label: `${m.name} (${m.provider})`, value: m.id }))}
+                value={embeddingSelectedModel}
+                onChange={(val) => setEmbeddingSelectedModel(val)}
+                searchable
+              />
+            </Grid.Col>
+            <Grid.Col span={{ base: 12, md: 6 }}>
+              <NumberInput
+                label="Max Chunk Size (characters)"
+                value={embeddingMaxChunk === '' ? undefined : embeddingMaxChunk}
+                onChange={(val: string | number) => setEmbeddingMaxChunk(typeof val === 'number' ? val : '')}
+                placeholder="e.g., 2000"
+                min={1}
+              />
+            </Grid.Col>
+          </Grid>
+          <Group mt="md">
+            <Button
+              onClick={() => {
+                if (!embeddingSelectedModel || typeof embeddingMaxChunk !== 'number') {
+                  throw new Error('Both embedding model and max chunk size are required');
+                }
+                connectionManager.sendUpdateEmbeddingSettings(embeddingSelectedModel, embeddingMaxChunk);
+              }}
+            >
+              Save Embedding Settings
+            </Button>
+          </Group>
         </Paper>
       )}
 

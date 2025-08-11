@@ -45,6 +45,8 @@ export class ConnectionManager {
   private messageCacheByAgent: Record<string, Message[]> = {};
   // Cache latest context usage per agent
   private contextByAgent: Record<string, { percentage: number | null; tokensUsed: number | null; contextWindow: number | null }> = {};
+  // Optional side channel to hint action type before streaming content materializes
+  public _onStreamStartAction?(agentId: string, streamId: string, action?: string): void;
 
   constructor() {
     this.setupEventListeners();
@@ -164,6 +166,23 @@ export class ConnectionManager {
 
   public sendRegisterAgent(agentId: string): void {
     backendAPIService.sendRegisterAgent(agentId);
+  }
+
+  public sendSaveConversation(agentId: string, sessionId: string): void {
+    backendAPIService.sendSaveConversation(agentId, sessionId);
+  }
+
+  public sendListConversations(agentId: string): void {
+    backendAPIService.sendListConversations(agentId);
+  }
+
+  public sendLoadConversation(agentId: string, sessionId: string): void {
+    backendAPIService.sendLoadConversation(agentId, sessionId);
+  }
+
+  public sendSummarizeRequest(agentId: string, sessionId: string, percentage: number): void {
+    // @ts-ignore
+    backendAPIService.sendSummarizeRequest(agentId, sessionId, percentage);
   }
 
   // New methods for replacing REST API calls
@@ -291,6 +310,19 @@ export class ConnectionManager {
 
   public sendGetSchemas(): void {
     backendAPIService.sendGetSchemas();
+  }
+
+  // Embedding settings WS helpers
+  public sendGetEmbeddingModels(): void {
+    backendAPIService.sendGetEmbeddingModels();
+  }
+
+  public sendGetEmbeddingSettings(): void {
+    backendAPIService.sendGetEmbeddingSettings();
+  }
+
+  public sendUpdateEmbeddingSettings(selected_model: string, max_chunk_size: number): void {
+    backendAPIService.sendUpdateEmbeddingSettings(selected_model, max_chunk_size);
   }
 
   public sendUpdateProvider(providerName: string, providerData: any): void {

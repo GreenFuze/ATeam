@@ -6,7 +6,7 @@
 import { connectionManager } from './ConnectionManager';
 
 export interface FrontendAPIMessage {
-  type: 'system_message' | 'agent_response' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
+  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
   message_id: string;
   timestamp: string;
   agent_id?: string;
@@ -22,6 +22,7 @@ export interface FrontendAPIMessage {
 export interface FrontendAPIHandlers {
   onSystemMessage?: (agentId: string, sessionId: string, data: any) => void;
   onAgentResponse?: (agentId: string, sessionId: string, data: any) => void;
+  onAgentStream?: (agentId: string, sessionId: string, data: { delta: string; message_id?: string }) => void;
   onSeedMessage?: (agentId: string, sessionId: string, data: any) => void;
   onError?: (agentId: string, sessionId: string, error: any) => void;
   onContextUpdate?: (agentId: string, sessionId: string, data: any) => void;
@@ -36,6 +37,8 @@ export interface FrontendAPIHandlers {
   onModelUpdate?: (data: any) => void;
   onSchemaUpdate?: (data: any) => void;
   onSessionCreated?: (agentId: string, sessionId: string, data: any) => void;
+  onConversationSnapshot?: (agentId: string, sessionId: string, data: { session_id: string; messages: any[] }) => void;
+  onConversationList?: (agentId: string, data: { sessions: Array<{ session_id: string; modified_at: string; file_path: string }> }) => void;
   onMonitoringHealth?: (data: any) => void;
   onMonitoringMetrics?: (data: any) => void;
   onMonitoringErrors?: (data: any) => void;
@@ -61,7 +64,7 @@ export class FrontendAPIService {
   }
 
   public setHandlers(handlers: FrontendAPIHandlers): void {
-    // Merge handlers instead of replacing them
+    // Merge handlers so multiple components can subscribe concurrently (Sidebar, AgentChat, etc.)
     this.handlers = { ...this.handlers, ...handlers };
     console.log('🔄 [Frontend] FrontendAPI handlers updated:', Object.keys(this.handlers).filter(key => this.handlers[key as keyof FrontendAPIHandlers]));
   }
@@ -146,7 +149,30 @@ export class FrontendAPIService {
       case 'agent_response':
         console.log('📥 [Frontend] Processing agent_response for agent:', message.agent_id);
         if (this.handlers.onAgentResponse && message.agent_id) {
-          this.handlers.onAgentResponse(message.agent_id, sessionId, message.data);
+          // Include message_id for deduplication on the UI side
+          const payload = { ...message.data, message_id: message.message_id };
+          this.handlers.onAgentResponse(message.agent_id, sessionId, payload);
+        }
+        break;
+
+      case 'agent_stream':
+        console.log('📥 [Frontend] Processing agent_stream for agent:', message.agent_id);
+        if (this.handlers.onAgentStream && message.agent_id) {
+          this.handlers.onAgentStream(message.agent_id, sessionId, message.data);
+        }
+        break;
+
+      case 'agent_stream_start':
+        console.log('📥 [Frontend] Processing agent_stream_start for agent:', message.agent_id);
+        if (this.handlers.onAgentStream && message.agent_id) {
+          // Pass a minimal delta and reuse message_id. The action is signaled by an empty delta; the component will read action from this branch.
+          // We can't extend the type here; instead we forward via a side channel in ConnectionManager if needed. For now, emit an empty delta to trigger stream start.
+          this.handlers.onAgentStream(message.agent_id, sessionId, { delta: '', message_id: message.data?.message_id });
+          // Also notify ConnectionManager (optional):
+          try {
+            // @ts-ignore: allow side channel for action hint
+            (message.data && (connectionManager as any)._onStreamStartAction) && (connectionManager as any)._onStreamStartAction(message.agent_id, message.data?.message_id, message.data?.action);
+          } catch {}
         }
         break;
 
@@ -168,6 +194,20 @@ export class FrontendAPIService {
         console.log('📥 [Frontend] Processing session_created for agent:', message.agent_id);
         if (this.handlers.onSessionCreated && message.agent_id) {
           this.handlers.onSessionCreated(message.agent_id, message.data.session_id || '', message.data);
+        }
+        break;
+
+      case 'conversation_snapshot':
+        console.log('📥 [Frontend] Processing conversation_snapshot for agent:', message.agent_id);
+        if (this.handlers.onConversationSnapshot && message.agent_id) {
+          this.handlers.onConversationSnapshot(message.agent_id, message.data.session_id, message.data);
+        }
+        break;
+
+      case 'conversation_list':
+        console.log('📥 [Frontend] Processing conversation_list for agent:', message.agent_id);
+        if (this.handlers.onConversationList && message.agent_id) {
+          this.handlers.onConversationList(message.agent_id, message.data);
         }
         break;
 

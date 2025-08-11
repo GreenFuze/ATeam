@@ -37,6 +37,20 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 
 ## Implementation Status
 
+### ✅ Latest updates (Aug 2025)
+- Conversation Save/Load (history/): end-to-end UI; backend persists to `./history/<agent_id>/<session_id>.json` and returns `conversation_list`/`conversation_snapshot`.
+- Fail-fast tool events: always emit `TOOL_CALL`/`TOOL_RETURN`; errors surface to UI (no fallbacks).
+- Structured logging: log raw inbound frontend JSON, raw LLM responses, and final outbound responses; stream deltas suppressed; `backend/ateam.log` overwrites on start.
+- Agent settings persistence: frontend includes immutable `id` on update; changes reliably saved to `agents.yaml`.
+- Embedding Settings: dedicated Settings → Embedding tab. No default model; user must select. Saved via WS and used by `embedding_manager`/`kb_manager`.
+- KB/Plan manager: `kb_manager` abstracts Chroma with per-agent storage at `backend/knowledgebase/<agent_id>/kb/`; chunking based on `max_chunk_size`; plan files at `backend/knowledgebase/<agent_id>/<plan>.md` with 4k limit and safe names. Strict agent isolation. Structured logs added for add/update/get/list/search and plan ops.
+- Streaming UX: frontend buffers until action detected (`agent_stream_start`), prevents “{” flicker, and de-duplicates final messages.
+- Frontend caching: `ConnectionManager` caches session/messages/context per agent; AgentChat restores on navigation without resetting.
+- Mandatory prompt/tools: `all_agents.md` enforced as first system prompt and KB/Plan tools mandatory; UI shows them pre-selected and disabled; backend re-validates.
+- Summarization observability: backend logs requested percentage, computed N, and outcome.
+- Concurrency/atomicity: `Agent` uses `RLock` around `messages`; `kb_manager` uses per-agent `RLock`; plan writes are atomic via temp + `os.replace`.
+- Environment: backend process sets working directory to `backend` so all relative paths (history, prompts, knowledgebase) resolve from there.
+
 ### ✅ Core Features
 - **Multi-Agent System**: YAML-based agent configuration with full CRUD operations
 - **LLM Integration**: Full integration with `llm` package and multiple providers
@@ -680,7 +694,7 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 62. **Cleaner Constructors**: Components don't require manager parameters
 63. **No Stale References**: Always get current manager instance via function call
 64. **Enhanced Message Display**: Multiple view modes (Markdown, Plain Text, Raw JSON) with action-based icons and reasoning toggle
-65. **Action-Based Icons**: Secondary icons for LLM messages showing action type (CHAT_RESPONSE, USE_TOOL, etc.)
+65. **Action-Based Icons**: Secondary icons for LLM messages showing action type (CHAT_RESPONSE, TOOL_CALL, etc.)
 66. **Raw Message View**: Complete JSON structure display for debugging and analysis
 67. **Reasoning Toggle**: User-controlled visibility of reasoning boxes in message metadata
 68. **Proper Tooltips**: User messages show "User response" tooltip, LLM messages show action-specific tooltips

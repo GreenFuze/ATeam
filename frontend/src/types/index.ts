@@ -1,12 +1,13 @@
 export enum MessageType {
   CHAT_RESPONSE = "CHAT_RESPONSE",
-  USE_TOOL = "USE_TOOL",
+  TOOL_CALL = "TOOL_CALL",
   TOOL_RETURN = "TOOL_RETURN",
   AGENT_CALL = "AGENT_CALL",
   AGENT_RETURN = "AGENT_RETURN",
   AGENT_DELEGATE = "AGENT_DELEGATE",
   REFINEMENT_RESPONSE = "REFINEMENT_RESPONSE",
-  SYSTEM = "SYSTEM"
+  SYSTEM = "SYSTEM",
+  ERROR = "ERROR"
 }
 
 export enum PromptType {
@@ -26,7 +27,7 @@ export interface ChatResponse extends StructuredResponse {
 }
 
 export interface ToolCallResponse extends StructuredResponse {
-  action: "USE_TOOL";
+  action: "TOOL_CALL";
   tool: string;
   args: Record<string, any>;
 }
@@ -181,6 +182,7 @@ export interface LLMResponse {
 }
 
 export interface CreateAgentRequest {
+  id?: string;
   name: string;
   description: string;
   model: string;

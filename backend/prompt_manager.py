@@ -37,14 +37,16 @@ class PromptManager:
                     
                     # Get prompt type from metadata or fallback to filename analysis
                     if prompt_name in prompts_metadata:
-                        prompt_type = PromptType(prompts_metadata[prompt_name]['type'])
+                        meta = prompts_metadata[prompt_name]
+                        prompt_type = PromptType(meta['type'])
                     else:
                         prompt_type = self._determine_prompt_type(filename, content)
                     
                     prompt_config = PromptConfig(
                         name=prompt_name,
                         content=content,
-                        type=prompt_type,
+                    type=prompt_type,
+                    default=(prompts_metadata.get(prompt_name, {}).get('default', False) if prompt_name in prompts_metadata else False),
                         created_at=datetime.fromtimestamp(os.path.getctime(file_path)).isoformat(),
                         updated_at=datetime.fromtimestamp(os.path.getmtime(file_path)).isoformat()
                     )
@@ -235,7 +237,7 @@ class PromptManager:
         
         return results
     
-    def _load_prompts_metadata(self) -> Dict[str, Dict[str, str]]:
+    def _load_prompts_metadata(self) -> Dict[str, Dict[str, Any]]:
         """Load prompts metadata from prompts.yaml file"""
         if not os.path.exists(self.prompts_yaml_path):
             return {}
@@ -249,7 +251,7 @@ class PromptManager:
         
         return {}
     
-    def _save_prompts_metadata(self, metadata: Dict[str, Dict[str, str]]):
+    def _save_prompts_metadata(self, metadata: Dict[str, Dict[str, Any]]):
         """Save prompts metadata to prompts.yaml file"""
         try:
             # Ensure directory exists
@@ -266,8 +268,12 @@ class PromptManager:
     def _update_prompt_metadata(self, prompt_name: str, prompt_type: PromptType):
         """Update prompts metadata in prompts.yaml"""
         metadata = self._load_prompts_metadata()
-        metadata[prompt_name] = {'type': prompt_type.value}
-        self._save_prompts_metadata(metadata)
+        # Preserve existing fields like 'default' if present
+        meta = self._load_prompts_metadata()
+        existing = meta.get(prompt_name, {})
+        existing['type'] = prompt_type.value
+        meta[prompt_name] = existing
+        self._save_prompts_metadata(meta)
     
     def create_seed_prompt(self, name: str, messages: List[SeedMessage]) -> str:
         """Create a seed prompt from a list of messages"""

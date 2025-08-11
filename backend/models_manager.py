@@ -170,8 +170,8 @@ class ModelsManager:
                     import llm.default_plugins.openai_models
                     # Check if there's an Embedding class with Options
                     if hasattr(llm.default_plugins.openai_models, 'Embedding'):
-                        Embedding = llm.default_plugins.openai_models.Embedding
-                        schema = Embedding.Options.model_json_schema()
+                        Embedding = llm.default_plugins.openai_models.Embedding  # type: ignore[attr-defined]
+                        schema = Embedding.Options.model_json_schema()  # type: ignore[attr-defined]
                         # Enhance with type information
                         type_fields = self.get_all_option_fields(Embedding.Options)
                         schema = self._enhance_schema_with_types(schema, type_fields)
@@ -203,8 +203,8 @@ class ModelsManager:
                     import llm_ollama
                     # Check if there's an embedding-specific class
                     if hasattr(llm_ollama, 'Embedding'):
-                        Embedding = llm_ollama.Embedding
-                        schema = Embedding.Options.model_json_schema()
+                        Embedding = llm_ollama.Embedding  # type: ignore[attr-defined]
+                        schema = Embedding.Options.model_json_schema()  # type: ignore[attr-defined]
                         # Enhance with type information
                         type_fields = self.get_all_option_fields(Embedding.Options)
                         schema = self._enhance_schema_with_types(schema, type_fields)
@@ -400,6 +400,40 @@ class ModelsManager:
                     )
                     result.append(model_view)
         
+        return result
+
+    def get_embedding_models(self) -> List[ModelInfoView]:
+        """Return only embedding-capable models as ModelInfoView entries."""
+        discovered = self.discover_models_from_llm()
+        result: List[ModelInfoView] = []
+
+        for model_id, info in discovered.items():
+            if info.get('is_embedding_model') or info.get('embedding_model'):
+                available_settings = self.get_provider_model_schema(info.get('provider', 'unknown'), True)
+                view = ModelInfoView(
+                    id=info['id'],
+                    name=info.get('name', info['id']),
+                    provider=info.get('provider', 'unknown'),
+                    description=info.get('description', ''),
+                    context_window_size=None,
+                    model_settings={},
+                    default_inference={},
+                    configured=(info['id'] in self.models),
+                    supports_schema=False,
+                    supports_tools=False,
+                    can_stream=False,
+                    available_settings=available_settings,
+                    embedding_model=True,
+                    vision=False,
+                    attachment_types=[],
+                    dimensions=info.get('dimensions'),
+                    truncate=info.get('truncate', False),
+                    supports_binary=info.get('supports_binary', False),
+                    supports_text=info.get('supports_text', False),
+                    embed_batch=info.get('embed_batch', False)
+                )
+                result.append(view)
+
         return result
     
     def get_model(self, model_id: str) -> Optional[ModelInfo]:
