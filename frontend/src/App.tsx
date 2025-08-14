@@ -146,8 +146,14 @@ function App() {
   };
 
   const handleSettingsSuccess = () => {
-    // Refresh the page or reload data as needed
-    window.location.reload();
+    // Close modal and refresh agents list without full page reload
+    setSettingsModalOpen(false);
+    try {
+      connectionManager.sendGetAgents();
+      notifications.show({ title: 'Agent saved', message: 'Agent list refreshed', color: 'green' });
+    } catch (e) {
+      console.error('Failed to refresh agents after save:', e);
+    }
   };
 
   const handleStartupComplete = () => {

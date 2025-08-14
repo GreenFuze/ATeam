@@ -3,8 +3,14 @@ from typing import List, Dict, Optional, Any, Union
 from enum import Enum
 import json
 
+class UnknownActionError(Exception):
+    """Raised when an LLM response contains an unknown or illegal action type."""
+    pass
+
 class MessageType(str, Enum):
     CHAT_RESPONSE = "CHAT_RESPONSE"
+    CHAT_RESPONSE_WAIT_USER_INPUT = "CHAT_RESPONSE_WAIT_USER_INPUT"
+    CHAT_RESPONSE_CONTINUE_WORK = "CHAT_RESPONSE_CONTINUE_WORK"
     TOOL_CALL = "TOOL_CALL"
     TOOL_RETURN = "TOOL_RETURN"
     AGENT_CALL = "AGENT_CALL"
@@ -164,6 +170,11 @@ class LLMResponse(BaseModel):
     tool_name: Optional[str] = None
     tool_parameters: Optional[Dict[str, Any]] = None
     target_agent_id: Optional[str] = None
+
+class SessionRef(BaseModel):
+    agent_id: str = Field(min_length=1)
+    session_id: str = Field(min_length=1)
+    agent_name: str = Field(min_length=1)
 
 
 

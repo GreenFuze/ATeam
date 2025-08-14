@@ -347,16 +347,37 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
           
           <div>
             <Text size="sm" fw={600} c="white">
-              {isUserMessage ? 'You' : (agentName || `Agent ${message.agent_id || 'Unknown'}`)}
+              {isUserMessage ? 'You' : (agentName || (message as any).agent_name || `Agent ${message.agent_id || 'Unknown'}`)}
             </Text>
           </div>
 
-          {/* Only show badge for non-CHAT_RESPONSE messages */}
-          {message.message_type !== MessageType.CHAT_RESPONSE && (
-            <Badge size="xs" variant="light" color={getMessageColor(message.message_type)}>
-              {message.message_type.replace('_', ' ')}
-            </Badge>
-          )}
+            {/* Badges */}
+          {(() => {
+            // Always show a small badge for intent if provided
+            const badges: JSX.Element[] = [];
+            const action = message.action || (message.metadata && (message.metadata as any).action);
+            if (action === 'CHAT_RESPONSE_CONTINUE_WORK') {
+              badges.push(
+                <Badge key="cont" size="xs" variant="light" color="blue">
+                  Continuing work
+                </Badge>
+              );
+            } else if (action === 'CHAT_RESPONSE_WAIT_USER_INPUT') {
+              badges.push(
+                <Badge key="wait" size="xs" variant="light" color="gray">
+                  Waiting for input
+                </Badge>
+              );
+            }
+            if (message.message_type !== MessageType.CHAT_RESPONSE) {
+              badges.push(
+                <Badge key="type" size="xs" variant="light" color={getMessageColor(message.message_type)}>
+                  {message.message_type.replace(/_/g, ' ')}
+                </Badge>
+              );
+            }
+            return badges.length ? <Group gap={6}>{badges}</Group> : null;
+          })()}
         </Group>
 
         <Box style={{ width: 28, display: 'flex', justifyContent: 'flex-end', flexShrink: 0 }}>

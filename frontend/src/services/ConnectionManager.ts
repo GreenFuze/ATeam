@@ -164,8 +164,12 @@ export class ConnectionManager {
     backendAPIService.sendSessionManagement(sessionId, action);
   }
 
-  public sendRegisterAgent(agentId: string): void {
-    backendAPIService.sendRegisterAgent(agentId);
+  public sendSubscribe(agentId: string, sessionId: string): void {
+    backendAPIService.sendSubscribe(agentId, sessionId);
+  }
+
+  public sendUnsubscribe(agentId: string, sessionId: string): void {
+    backendAPIService.sendUnsubscribe(agentId, sessionId);
   }
 
   public sendSaveConversation(agentId: string, sessionId: string): void {
@@ -173,7 +177,8 @@ export class ConnectionManager {
   }
 
   public sendListConversations(agentId: string): void {
-    backendAPIService.sendListConversations(agentId);
+    const sid = this.getSessionId(agentId) || '';
+    backendAPIService.sendListConversations(agentId, sid);
   }
 
   public sendLoadConversation(agentId: string, sessionId: string): void {

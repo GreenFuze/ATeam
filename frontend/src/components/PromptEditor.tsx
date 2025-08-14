@@ -139,7 +139,7 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
       size="80%"
       centered
       styles={{
-        body: { maxHeight: '95vh', overflow: 'hidden' }
+        body: { maxHeight: '90vh', overflowY: 'auto' }
       }}
     >
       <form onSubmit={handleSubmit}>

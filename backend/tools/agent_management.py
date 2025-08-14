@@ -29,6 +29,28 @@ def get_all_agents() -> Union[List[Dict[str, Any]], Dict[str, str]]:
         return {"error": f"Failed to get agents: {str(e)}"}
 
 
+def get_all_agents_descriptions() -> Union[List[Dict[str, str]], Dict[str, str]]:
+    """
+    Get id, name, and description for all agents.
+
+    Returns:
+        Union[List[Dict[str, str]], Dict[str, str]]: List of {id, name, description} for each agent,
+        or error dict if failed.
+    """
+    try:
+        agent_configs = agent_manager().get_all_agent_configs()
+        return [
+            {
+                "id": a.id,
+                "name": a.name,
+                "description": a.description,
+            }
+            for a in agent_configs
+        ]
+    except Exception as e:
+        return {"error": f"Failed to get agent descriptions: {str(e)}"}
+
+
 def get_agent_by_name(name: str) -> Optional[Dict[str, Any]]:
     """
     Get an agent by its name.

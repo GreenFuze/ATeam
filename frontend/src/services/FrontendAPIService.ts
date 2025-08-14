@@ -10,6 +10,7 @@ export interface FrontendAPIMessage {
   message_id: string;
   timestamp: string;
   agent_id?: string;
+  agent_name?: string;
   session_id?: string;
   data: any; // Structured data per message type
   error?: {

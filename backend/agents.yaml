@@ -1,6 +1,6 @@
 agents:
 - created_at: null
-  description: The master agent that can create other agents and manage them
+  description: Zeus agent creates and manages other agents in the system
   enable_scratchpad: true
   enable_summarization: true
   grammar_file: null
@@ -20,39 +20,76 @@ agents:
   - get_agent_by_name
   - get_current_directory
   - get_environment_variable
-  updated_at: '2025-08-09T19:55:40.200809'
-- created_at: '2025-08-10T13:17:25.203088'
-  description: MetaFFI agent system frontdesk agent
+  - kb_add
+  - kb_update
+  - kb_get
+  - kb_list
+  - kb_search
+  - plan_read
+  - plan_write
+  - plan_append
+  - plan_delete
+  - plan_list
+  updated_at: '2025-08-11T20:49:56.896756'
+- created_at: null
+  description: |
+    Coorginator agent is MetaFFI agent system frontdesk agent.
+    Coordinator agent can answer high-level questions about MetaFFI system,
+    and call or delegate other agents to perform tasks or answer questions it cannot perform.
   enable_scratchpad: true
   enable_summarization: true
   grammar_file: null
-  id: coordinator-agent
+  id: coordinator
   max_tokens: null
   model: gpt-4.1-nano
-  name: Coordinator Agent
+  name: Coordinator
   prompts:
   - all_agents.md
+  - metaffi-overview.md
   - coordinator_agent.md
   schema_file: null
-  temperature: 0.37
+  temperature: 0.3
   tools:
   - get_environment_variable
-  - get_all_agents
-  updated_at: '2025-08-10T13:17:25.203088'
+  - get_all_agents_descriptions
+  - kb_add
+  - kb_update
+  - kb_get
+  - kb_list
+  - kb_search
+  - plan_read
+  - plan_write
+  - plan_append
+  - plan_delete
+  - plan_list
+  updated_at: '2025-08-11T19:25:33.464875'
 - created_at: null
-  description: Builds and tests the system using provided prompts and tools
+  description: Builds and runs tests for the entire MetaFFI system with concise results and logs
   enable_scratchpad: true
   enable_summarization: true
   grammar_file: null
-  id: system-build-and-test-agent
+  id: system-build-and-test
   max_tokens: null
   model: gpt-4.1-nano
-  name: System build and test agent
+  name: System Builder and Tester*
   prompts:
   - all_agents.md
+  - metaffi-overview.md
+  - system_build_and_test_agent.md
   - how_to_build_and_test.md
+  - cmake.md
   schema_file: null
   temperature: 0.3
   tools:
   - append_knowledgebase
+  - kb_add
+  - kb_update
+  - kb_get
+  - kb_list
+  - kb_search
+  - plan_read
+  - plan_write
+  - plan_append
+  - plan_delete
+  - plan_list
   updated_at: null

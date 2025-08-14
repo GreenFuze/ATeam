@@ -38,18 +38,38 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 ## Implementation Status
 
 ### ✅ Latest updates (Aug 2025)
+- FrontendAPI facades: introduced typed, intent-specific senders: `send_to_agent(ref)` and `send_to_agents(a,b)` with Pydantic envelopes for `system_prompt`, `seed_prompts`, `delegation_announcement`, `agent_call_announcement`, `agent_response`, `stream`, `stream_start`, `context_update`, `conversation_snapshot`, `conversation_list`. Targeted delivery with subscribe-first, broadcast-fallback for initial hydration.
+- Removed legacy direct sends: deprecated and then removed `send_system_message`, `send_agent_response`, `send_agent_stream(_start)`, `send_conversation_snapshot`, `send_conversation_list`, `send_context_update`, `send_error`. All call sites now use facades.
+- Fail-fast transport: `send_to_connection` now raises on missing/invalid connections (no silent warnings) and disconnects on send errors.
+- Agent single-session invariant: `Agent` instances are strictly per-session. `get_response_for_session` now validates the session_id and delegates to `get_response`; `_current_session_id` removed.
+- Orchestration split: delegation vs call have distinct flows. Delegation announces and does not await/return; call announces, awaits, and returns `AGENT_RETURN`. Target connection ensuring moved to a dedicated helper.
+- SessionRef unification: `FrontendAPI.send_system_message` now accepts `SessionRef`; all call sites updated (`Agent.ensure_connection`, `BackendAPI.handle_agent_refresh`, delegation/call flows).
+- Fast agent lookup: added `AgentManager.get_agent_by_id_and_session(agent_id, session_id)` and replaced `get_agent_by_session` in `BackendAPI` (chat and summarize). `AgentManager.save_conversation` now uses the fast lookup.
+- Agent orchestration cleanup: `Agent.ensure_connection()` returns `SessionRef`; removed `_ensure_target_session`; call sites simplified.
+- Emission scheduling: `_emit_immediate_and_mark` is non-async and always schedules an internal async send; removed redundant `session_id` param.
+- Target invocation: `_invoke_target_and_return` ensures target connection internally, infers session from `target_instance`, and has a simplified signature (no `target_session_id`/`caller_session_id`). Docstring added.
+- Logging polish: reduced inbound chat logs to debug; clarified unknown message error text.
+- Lint status: All updated files pass lints.
 - Conversation Save/Load (history/): end-to-end UI; backend persists to `./history/<agent_id>/<session_id>.json` and returns `conversation_list`/`conversation_snapshot`.
 - Fail-fast tool events: always emit `TOOL_CALL`/`TOOL_RETURN`; errors surface to UI (no fallbacks).
 - Structured logging: log raw inbound frontend JSON, raw LLM responses, and final outbound responses; stream deltas suppressed; `backend/ateam.log` overwrites on start.
-- Agent settings persistence: frontend includes immutable `id` on update; changes reliably saved to `agents.yaml`.
+- Agent settings persistence: frontend includes immutable `id` on update; changes reliably saved to `agents.yaml`. Removed full-page reload after save; list refreshes via WS.
 - Embedding Settings: dedicated Settings → Embedding tab. No default model; user must select. Saved via WS and used by `embedding_manager`/`kb_manager`.
 - KB/Plan manager: `kb_manager` abstracts Chroma with per-agent storage at `backend/knowledgebase/<agent_id>/kb/`; chunking based on `max_chunk_size`; plan files at `backend/knowledgebase/<agent_id>/<plan>.md` with 4k limit and safe names. Strict agent isolation. Structured logs added for add/update/get/list/search and plan ops.
-- Streaming UX: frontend buffers until action detected (`agent_stream_start`), prevents “{” flicker, and de-duplicates final messages.
+- Streaming UX: buffer until `agent_stream_start` reveals action; prevent initial “{” flicker; de-duplicate final messages.
 - Frontend caching: `ConnectionManager` caches session/messages/context per agent; AgentChat restores on navigation without resetting.
+- Chat autoscroll: scrolls only when the user is already at bottom (or on the very first system prompt load); does not jump when scrolled up; clears view on agent switch to avoid mixed prompts.
 - Mandatory prompt/tools: `all_agents.md` enforced as first system prompt and KB/Plan tools mandatory; UI shows them pre-selected and disabled; backend re-validates.
 - Summarization observability: backend logs requested percentage, computed N, and outcome.
+- Prompts and routing: added `system_build_and_test_agent.md`; refined agent descriptions for routing; new tool `get_all_agents_descriptions`; coordinator now uses it.
+- Frontend prompt editor: agent edit dialog includes in-place prompt view/edit with a scrollable modal body.
+- Backend refactor: reduced duplication in `backend_api.py` with private helpers for agent list serialization/broadcast; `agent_list_update` payload now consistently includes `agents` for create/update/delete.
 - Concurrency/atomicity: `Agent` uses `RLock` around `messages`; `kb_manager` uses per-agent `RLock`; plan writes are atomic via temp + `os.replace`.
-- Environment: backend process sets working directory to `backend` so all relative paths (history, prompts, knowledgebase) resolve from there.
+- Environment: backend process sets working directory to `backend` so relative paths (history, prompts, knowledgebase) resolve from there.
+- Agent delegation/call: `AGENT_CALL`/`AGENT_DELEGATE` now forward to target agent; auto-create target instance/session if missing; emit `session_created` for target and `AGENT_RETURN` back to caller.
+ - Startup fix: removed circular import between `objects_registry` and `frontend_api` using lazy agent-name resolver.
+ - Explicit chat intents: added `CHAT_RESPONSE_WAIT_USER_INPUT` and `CHAT_RESPONSE_CONTINUE_WORK`; UI shows badges; backend parsing compares actions against enum values.
+ - Delegation policy: prompts updated (`backend/prompts/all_agents.md`) to forbid announcing delegation via `CHAT_RESPONSE`; agents must output a single `AGENT_CALL`/`AGENT_DELEGATE` when collaborating; self-call guard enforced; auto-chaining after agent actions disabled.
 
 ### ✅ Core Features
 - **Multi-Agent System**: YAML-based agent configuration with full CRUD operations

@@ -29,20 +29,37 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   // Track the current streaming message id in a ref to avoid stale closures
   const streamingMessageIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollViewportRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const streamBufferRef = useRef<string>("");
   const streamActionRef = useRef<string | null>(null);
+  const autoScrollAllowedRef = useRef<boolean>(false);
+  const initialAutoScrollPendingRef = useRef<boolean>(false);
+  const atBottomRef = useRef<boolean>(true);
 
   useEffect(() => {
     if (agentId) {
+      // Reset UI state on agent switch to avoid showing previous agent messages
+      setIsLoading(false);
+      setMessages([]);
+      setContextUsage(null);
+      setTokensUsed(null);
+      setContextWindow(null);
+      streamingMessageIdRef.current = null;
+      streamBufferRef.current = "";
+      streamActionRef.current = null;
+      autoScrollAllowedRef.current = false;
+      initialAutoScrollPendingRef.current = false;
+
       loadAgentInfo();
       // Restore session and messages from cache if available
       const cachedSession = connectionManager.getSessionId(agentId);
       if (cachedSession) {
         setSessionId(cachedSession);
         const cachedMessages = connectionManager.getMessages(agentId);
-        if (cachedMessages.length > 0) {
-          setMessages(cachedMessages);
+        setMessages(cachedMessages); // may be empty; ensures we clear prior agent's messages
+        if (!cachedMessages || cachedMessages.length === 0) {
+          initialAutoScrollPendingRef.current = true;
         }
         const cachedContext = connectionManager.getContext(agentId);
         if (cachedContext) {
@@ -73,8 +90,35 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   }, [agentInfo, sessionId]);
 
   useEffect(() => {
-    scrollToBottom();
+    // Autoscroll only when user is already at the bottom, or on the very first system prompt show
+    if (initialAutoScrollPendingRef.current) {
+      scrollToBottom();
+      initialAutoScrollPendingRef.current = false;
+      return;
+    }
+    if (atBottomRef.current) {
+      scrollToBottom();
+    }
   }, [messages]);
+
+  // Track whether the viewport is scrolled to bottom
+  useEffect(() => {
+    const el = scrollViewportRef.current;
+    if (!el) return;
+    const threshold = 8; // px
+    const handleScroll = () => {
+      try {
+        const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+        atBottomRef.current = nearBottom;
+      } catch {}
+    };
+    // Initialize
+    handleScroll();
+    el.addEventListener('scroll', handleScroll);
+    return () => {
+      el.removeEventListener('scroll', handleScroll);
+    };
+  }, [scrollViewportRef.current]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -121,10 +165,14 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             content: data.content,
             message_type: MessageType.SYSTEM,
             timestamp: data.timestamp || new Date().toISOString(),
-            metadata: data.metadata || {},
+            metadata: { ...(data.metadata || {}), agent_name: data.agent_name },
           };
           setMessages(prev => [...prev, systemMessage]);
           connectionManager.appendMessage(agentId, systemMessage);
+          if (initialAutoScrollPendingRef.current) {
+            autoScrollAllowedRef.current = true;
+            initialAutoScrollPendingRef.current = false;
+          }
         },
         onAgentResponse: (_agentId: string, _sessionId: string, data: any) => {
           // Assert that data is properly structured - if not, there's a backend bug
@@ -185,7 +233,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             content: data.content,
             message_type: messageType,
             timestamp: data.timestamp || new Date().toISOString(),
-            metadata: data.metadata || {},
+            metadata: { ...(data.metadata || {}), agent_name: data.agent_name },
             action: data.action,
             reasoning: data.reasoning,
             tool_name: data.tool_name,
@@ -324,7 +372,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             content: data.content,
             message_type: seedMessageType,
             timestamp: data.timestamp || new Date().toISOString(),
-            metadata: data.metadata || {},
+            metadata: { ...(data.metadata || {}), agent_name: data.agent_name },
           };
           setMessages(prev => [...prev, seedMessage]);
           connectionManager.appendMessage(agentId, seedMessage);
@@ -351,6 +399,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
           }
           // Always update the session id cache per agent
           connectionManager.setSessionId(receivedAgentId, data.session_id);
+          // Subscribe to the routed stream for this agent/session
+          connectionManager.sendSubscribe(receivedAgentId, data.session_id);
           if (receivedAgentId === agentId) {
             setSessionId(data.session_id);
             setIsLoading(false);
@@ -423,8 +473,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
         },
       });
 
-      // Register this agent for the connection
-      connectionManager.sendRegisterAgent(agentId);
+      // No legacy register; we subscribe after session_created
       
       // Create session if not provided AND no cached one exists
       if (!propSessionId) {
@@ -654,7 +703,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
         </Box>
 
         {/* Messages */}
-        <ScrollArea flex={1} p="md">
+        <ScrollArea flex={1} p="md" viewportRef={scrollViewportRef}>
           <Stack gap="md">
             {messages.length === 0 ? (
               <Box ta="center" py="xl">

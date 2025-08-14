@@ -17,16 +17,11 @@ async def notify_with_timeout(title, message, exception, context, timeout=3):
 
 def send_error_sync(title, message, exception=None, context=None):
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(
-                notify_with_timeout(title, message, exception, context)
-            )
-        else:
-            asyncio.run(
-                notify_with_timeout(title, message, exception, context)
-            )
+        # Require a running loop; schedule and return
+        loop = asyncio.get_running_loop()
+        loop.create_task(notify_with_timeout(title, message, exception, context))
     except RuntimeError:
+        # No running loop; fail-fast to console
         print(f"❌ ERROR: {title} - {message}")
         if exception:
             import traceback
@@ -37,26 +32,18 @@ def send_error_sync(title, message, exception=None, context=None):
 def send_warning_sync(title: str, message: str, context: Optional[Dict[str, Any]] = None):
     """Synchronous wrapper for sending warning notifications"""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(notify_warning(title, message, context))
-        else:
-            asyncio.run(notify_warning(title, message, context))
+        loop = asyncio.get_running_loop()
+        loop.create_task(notify_warning(title, message, context))
     except RuntimeError:
-        # Fallback to print if we can't send notification
         print(f"⚠️ WARNING: {title} - {message}")
 
 
 def send_info_sync(title: str, message: str, context: Optional[Dict[str, Any]] = None):
     """Synchronous wrapper for sending info notifications"""
     try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.create_task(notify_info(title, message, context))
-        else:
-            asyncio.run(notify_info(title, message, context))
+        loop = asyncio.get_running_loop()
+        loop.create_task(notify_info(title, message, context))
     except RuntimeError:
-        # Fallback to print if we can't send notification
         print(f"ℹ️ INFO: {title} - {message}")
 
 

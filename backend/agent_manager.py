@@ -14,9 +14,9 @@ class AgentManager:
     def __init__(self, config_path: str = "agents.yaml"):
         self.config_path = config_path
         self.agents_config: dict[str, AgentConfig] = {}
-        self.agent_instances: dict[str, Agent] = {}  # Lazy-loaded agent instances
+        # Allow multiple instances per agent id: agent_id -> { session_id -> Agent }
+        self.agent_instances: dict[str, dict[str, Agent]] = {}
         self.session_to_agent: Dict[str, Agent] = {}  # session_id -> agent_instance
-        self.agent_to_sessions: Dict[str, List[str]] = {}  # agent_id -> [session_ids]
         self.load_agents()
         
     def load_agents(self):
@@ -72,6 +72,9 @@ class AgentManager:
         """Get all agent configurations as AgentConfig objects"""
         return list(self.agents_config.values())
     
+    def is_agent_config(self, agent_id: str) -> bool:
+        return agent_id in self.agents_config
+    
     def get_agent_config(self, agent_id: str) -> AgentConfig:
         """Get a specific agent configuration by ID"""
         if agent_id not in self.agents_config:
@@ -79,29 +82,31 @@ class AgentManager:
         
         return self.agents_config[agent_id]
     
-    def get_agent(self, agent_id: str) -> Agent:
-        """Get an agent instance with lazy loading"""
-        
-        # Return cached instance if available
-        if agent_id in self.agent_instances:
-            return self.agent_instances[agent_id]
-        
+    def create_agent(self, agent_id: str) -> Agent:
+        """Create a new agent instance (new session) and register it."""
         # Check if agent exists
         agent_config = self.get_agent_config(agent_id)
-
         # Create new instance
         agent_instance = Agent(agent_config)
-        self.agent_instances[agent_id] = agent_instance
+        # Register in maps
+        if agent_id not in self.agent_instances:
+            self.agent_instances[agent_id] = {}
+        self.agent_instances[agent_id][agent_instance.session_id] = agent_instance
+        self.register_agent_session(agent_instance)
         return agent_instance
     
     def clear_agent_instance(self, agent_id: str) -> None:
-        """Clear a cached agent instance"""
+        """Clear all cached agent instances for a given agent_id"""
         if agent_id in self.agent_instances:
+            for sess_id in list(self.agent_instances[agent_id].keys()):
+                if sess_id in self.session_to_agent:
+                    del self.session_to_agent[sess_id]
             del self.agent_instances[agent_id]
     
     def clear_all_agent_instances(self) -> None:
         """Clear all cached agent instances"""
         self.agent_instances.clear()
+        self.session_to_agent.clear()
     
     def add_agent(self, agent_config: AgentConfig) -> None:
         """Add a new agent with the provided configuration"""
@@ -203,27 +208,9 @@ class AgentManager:
         
         return True
     
-    def create_agent_session(self, agent_id: str) -> str:
-        """Create a new session for an agent and return session_id"""
-        # Verify agent exists
-        agent_config = self.get_agent_config(agent_id)
-        
-        # Generate session ID: [agent_name]_XXX
-        session_id = f"{agent_config.name}_{random.randint(100, 999)}"
-        
-        # Create agent instance if not exists
-        agent_instance = self.get_agent(agent_id)
-        
-        # Store session mapping
-        self.session_to_agent[session_id] = agent_instance
-        
-        # Track sessions per agent
-        if agent_id not in self.agent_to_sessions:
-            self.agent_to_sessions[agent_id] = []
-        self.agent_to_sessions[agent_id].append(session_id)
-        
-        log_info("AgentManager", f"Created session {session_id} for agent {agent_id}")
-        return session_id
+    def register_agent_session(self, agent_instance: Agent) -> None:
+        """Register the agent instance's session_id for routing."""
+        self.session_to_agent[agent_instance.session_id] = agent_instance
     
     def get_agent_by_session(self, session_id: str) -> Agent:
         """Get agent instance by session ID"""
@@ -231,36 +218,38 @@ class AgentManager:
             raise ValueError(f"Session '{session_id}' not found")
         return self.session_to_agent[session_id]
     
+    def get_agent_by_id_and_session(self, agent_id: str, session_id: str) -> Agent:
+        """Get agent instance by explicit agent_id and session_id using nested map.
+        Fail-fast if agent_id or session_id not found.
+        """
+        if agent_id not in self.agent_instances:
+            raise ValueError(f"Agent '{agent_id}' has no active instances")
+        sessions = self.agent_instances[agent_id]
+        if session_id not in sessions:
+            raise ValueError(f"Session '{session_id}' not found for agent '{agent_id}'")
+        return sessions[session_id]
+    
     def close_session(self, session_id: str) -> None:
         """Close a session and clean up mappings"""
         if session_id in self.session_to_agent:
             agent_instance = self.session_to_agent[session_id]
-            
-            # Find agent_id for this instance
-            agent_id = None
-            for aid, instance in self.agent_instances.items():
-                if instance == agent_instance:
-                    agent_id = aid
-                    break
+            agent_id = agent_instance.config.id
             
             # Remove from mappings
             del self.session_to_agent[session_id]
             
-            if agent_id and agent_id in self.agent_to_sessions:
-                if session_id in self.agent_to_sessions[agent_id]:
-                    self.agent_to_sessions[agent_id].remove(session_id)
-                
-                # If no more sessions for this agent, clear the instance
-                if not self.agent_to_sessions[agent_id]:
-                    del self.agent_to_sessions[agent_id]
-                    if agent_id in self.agent_instances:
-                        del self.agent_instances[agent_id]
+            if agent_id in self.agent_instances and session_id in self.agent_instances[agent_id]:
+                del self.agent_instances[agent_id][session_id]
+                if not self.agent_instances[agent_id]:
+                    del self.agent_instances[agent_id]
             
             log_info("AgentManager", f"Closed session {session_id}")
     
     def get_sessions_for_agent(self, agent_id: str) -> List[str]:
-        """Get all session IDs for a specific agent"""
-        return self.agent_to_sessions.get(agent_id, []) 
+        """Get all session IDs for a specific agent by scanning instances."""
+        if agent_id not in self.agent_instances:
+            return []
+        return list(self.agent_instances[agent_id].keys())
 
     # ===== Conversation Persistence (history/) =====
     def _history_dir(self) -> Path:
@@ -279,7 +268,7 @@ class AgentManager:
         """
         if not session_id:
             raise ValueError("session_id is required to save conversation")
-        agent_instance = self.get_agent_by_session(session_id)
+        agent_instance = self.get_agent_by_id_and_session(agent_id, session_id)
         history_dir = self._agent_history_dir(agent_id)
         history_dir.mkdir(parents=True, exist_ok=True)
 
@@ -342,8 +331,8 @@ class AgentManager:
         from schemas import ConversationData, Message
         conv_data = ConversationData.model_validate(data)
 
-        # Ensure agent instance exists and replace messages
-        agent_instance = self.get_agent(agent_id)
+        # Ensure agent instance exists and replace messages (create fresh instance for this load)
+        agent_instance = self.create_agent(agent_id)
         agent_instance.clear_conversation()
         messages_models: List[Message] = []
         for msg in conv_data.responses:
@@ -353,11 +342,12 @@ class AgentManager:
         agent_instance.messages = messages_models
 
         # Switch mapping to the loaded session id
+        # Rebind the agent instance to the loaded session id
+        agent_instance.session_id = conv_data.session_id
+        # Mark as not yet announced so caller can ensure_connection
+        if hasattr(agent_instance, "_connection_established"):
+            agent_instance._connection_established = False
         self.session_to_agent[conv_data.session_id] = agent_instance
-        if agent_id not in self.agent_to_sessions:
-            self.agent_to_sessions[agent_id] = []
-        if conv_data.session_id not in self.agent_to_sessions[agent_id]:
-            self.agent_to_sessions[agent_id].append(conv_data.session_id)
 
         # Build snapshot for frontend
         snapshot = {

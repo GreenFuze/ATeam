@@ -19,26 +19,41 @@ class BackendAPI:
     
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
+
+    # ---------- private helpers ----------
+    def _get_agents_dump(self) -> list[Dict[str, Any]]:
+        """Return all agents as serializable dicts (single source of truth)."""
+        agent_configs = agent_manager().get_all_agent_configs()
+        return [agent.model_dump() for agent in agent_configs]
+
+    async def _broadcast_agent_list(self, action: str | None = None, *, agent: Dict[str, Any] | None = None, agent_id: str | None = None) -> None:
+        """Send a consistent agent_list_update payload to all frontends."""
+        payload: Dict[str, Any] = {"agents": self._get_agents_dump()}
+        if action is not None:
+            payload["action"] = action
+        if agent is not None:
+            payload["agent"] = agent
+        if agent_id is not None:
+            payload["agent_id"] = agent_id
+        await frontend_api().send_agent_list_update(payload)
     
     async def connect(self, websocket: WebSocket, connection_id: str):
         """Accept a new WebSocket connection from frontend"""
         await websocket.accept()
         self.active_connections[connection_id] = websocket
-        logger.info(f"Backend API connected: {connection_id}")
+        logger.debug(f"Backend API connected: {connection_id}")
     
     def disconnect(self, connection_id: str):
         """Remove a WebSocket connection"""
         if connection_id in self.active_connections:
             del self.active_connections[connection_id]
-            logger.info(f"Backend API disconnected: {connection_id}")
+            logger.debug(f"Backend API disconnected: {connection_id}")
     
     async def handle_message(self, websocket: WebSocket, connection_id: str):
         """Handle incoming messages from frontend"""
         try:
             while True:
                 data = await websocket.receive_text()
-                # Log full raw JSON received from frontend
-                logger.info(f"📥 [Backend] Raw inbound JSON from {connection_id}: {data}")
                 message = json.loads(data)
                 
                 # Route message based on type
@@ -48,7 +63,11 @@ class BackendAPI:
                 session_id = message.get("session_id")
                 data_payload = message.get("data", {})
                 
-                logger.info(f"Received message: {message_type} from {connection_id}")
+                # Only log user chat messages at INFO level
+                if message_type == "chat_message":
+                    logger.debug(f"📥 User -> {agent_id} [{session_id}]: {data_payload.get('content', '')}")
+                else:
+                    logger.debug(f"Received message: {message_type} from {connection_id}")
                 
                 if message_type == "chat_message":
                     await self.handle_chat_message(
@@ -66,14 +85,26 @@ class BackendAPI:
                         session_id,
                         data_payload.get("action", "")
                     )
-                elif message_type == "register_agent":
-                    await self.handle_register_agent(
+                elif message_type == "subscribe":
+                    await self.handle_subscribe(
                         connection_id,
-                        agent_id
+                        agent_id,
+                        session_id,
+                    )
+                elif message_type == "unsubscribe":
+                    await self.handle_unsubscribe(
+                        connection_id,
+                        agent_id,
+                        session_id,
                     )
                 elif message_type == "get_agents":
-                    logger.info("🔄 [Backend] Routing get_agents to handle_get_agents")
+                    logger.debug("🔄 [Backend] Routing get_agents to handle_get_agents")
                     await self.handle_get_agents()
+                elif message_type == "register_agent":
+                    # Backward-compat: treat as subscribe without session (fail-fast if missing)
+                    if not session_id:
+                        raise ValueError("register_agent requires session_id; use subscribe instead")
+                    await self.handle_subscribe(connection_id, agent_id, session_id)
                 elif message_type == "create_agent":
                     await self.handle_create_agent(data_payload)
                 elif message_type == "update_agent":
@@ -95,7 +126,7 @@ class BackendAPI:
                 elif message_type == "save_conversation":
                     await self.handle_save_conversation(agent_id, session_id)
                 elif message_type == "list_conversations":
-                    await self.handle_list_conversations(agent_id)
+                    await self.handle_list_conversations(agent_id, session_id)
                 elif message_type == "load_conversation":
                     await self.handle_load_conversation(agent_id, data_payload.get("session_id"))
                 elif message_type == "get_embedding_models":
@@ -107,7 +138,7 @@ class BackendAPI:
                 elif message_type == "summarize_request":
                     await self.handle_summarize_request(agent_id, session_id, data_payload)
                 else:
-                    raise ValueError(f"Unknown message type: {message_type}")
+                    raise ValueError(f"Unknown message type from frontend: {message_type}")
                     
         except WebSocketDisconnect:
             self.disconnect(connection_id)
@@ -122,65 +153,36 @@ class BackendAPI:
     async def handle_chat_message(self, agent_id: str, session_id: str, message: str):
         """Handle chat message from frontend (async)"""
         try:
-            agent = agent_manager().get_agent_by_session(session_id)
-            response = await agent.get_response(message)
+            agent = agent_manager().get_agent_by_id_and_session(agent_id, session_id)
+            response = await agent.get_response_for_session(session_id, message)
             # Response is sent via FrontendAPI in agent.get_response()
         except Exception as e:
-            logger.error(f"Error in chat message for {agent_id}: {e}")
             import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            # FAIL-FAST: Re-raise the exception instead of fallback
+            logger.error(f"❌ Error in chat message for {agent_id}: {e}\nTraceback: {traceback.format_exc()}")
             raise
     
     async def handle_agent_refresh(self, agent_id: str, session_id: str):
         """Handle agent refresh request from frontend (async)"""
         try:
-            logger.info(f"Starting agent refresh for {agent_id}")
+            logger.debug(f"Starting agent refresh for {agent_id}")
             
             # Clear the agent instance
             agent_manager().clear_agent_instance(agent_id)
-            logger.info(f"Cleared agent instance for {agent_id}")
+            logger.debug(f"Cleared agent instance for {agent_id}")
             
-            # Create new session using the provided session_id
-            new_session_id = agent_manager().create_agent_session(agent_id)
-            logger.info(f"Created session {new_session_id} for {agent_id}")
+            # Create a fresh agent instance (new session)
+            agent = agent_manager().create_agent(agent_id)
+            new_session_id = agent.session_id
+            logger.info(f"session_created -> {agent_id}: {new_session_id}")
+            logger.debug(f"Retrieved agent instance for {agent_id}")
             
-            # Get the new agent instance
-            agent = agent_manager().get_agent_by_session(new_session_id)
-            logger.info(f"Retrieved agent instance for {agent_id}")
-            
-            # Send session created message with the new session ID
-            await frontend_api().send_session_created(agent_id, new_session_id)
-            logger.info(f"Sent session_created message for {agent_id}")
-            
-            # Send system message (includes agent description, system prompts, and tools)
-            system_prompt = agent.full_system_prompt
-            logger.info(f"Generated system prompt for {agent_id}: {len(system_prompt)} characters")
-            await frontend_api().send_system_message(agent_id, system_prompt)
-            logger.info(f"Sent system_message for {agent_id}")
-            
-            # Send seed messages if they exist
-            if agent.seed_messages:
-                logger.info(f"Found {len(agent.seed_messages)} seed messages for {agent_id}")
-                # Convert SeedMessage objects to Message objects
-                from schemas import Message, MessageType
-                seed_messages = []
-                for seed_msg in agent.seed_messages:
-                    message = Message(
-                        id=str(uuid.uuid4()),
-                        agent_id=agent_id,
-                        content=seed_msg.content,
-                        message_type=MessageType.SYSTEM if seed_msg.role == "system" else MessageType.CHAT_RESPONSE,
-                        timestamp=datetime.now().isoformat(),
-                        metadata={"seed_message": True, "role": seed_msg.role}
-                    )
-                    seed_messages.append(message)
-                await frontend_api().send_seed_messages(agent_id, seed_messages)
-                logger.info(f"Sent seed_messages for {agent_id}")
-            else:
-                logger.info(f"No seed messages for {agent_id}")
+            # Send session created message with the new session ID (broadcast) and hydrate
+            from schemas import SessionRef
+            ref = SessionRef(agent_id=agent_id, session_id=new_session_id, agent_name=agent.config.name)
+            await frontend_api().send_session_created(ref)
+            await frontend_api().send_to_agent(ref).system_prompt(agent.full_system_prompt)
                 
-            logger.info(f"Agent refresh completed successfully for {agent_id}")
+            logger.debug(f"Agent refresh completed successfully for {agent_id}")
                 
         except Exception as e:
             logger.error(f"Error in agent refresh for {agent_id}: {e}")
@@ -203,22 +205,22 @@ class BackendAPI:
         except Exception as e:
             logger.error(f"Error in session management: {e}")
     
-    async def handle_register_agent(self, connection_id: str, agent_id: str):
-        """Register a connection to listen to a specific agent"""
-        frontend_api().register_agent_connection(agent_id, connection_id)
-        logger.info(f"Connection {connection_id} registered for agent {agent_id}")
+    async def handle_subscribe(self, connection_id: str, agent_id: str, session_id: str):
+        """Subscribe a connection to (agent_id, session_id)"""
+        frontend_api().subscribe(connection_id, agent_id, session_id)
+        logger.debug(f"Connection {connection_id} subscribed to {agent_id}[{session_id}]")
+
+    async def handle_unsubscribe(self, connection_id: str, agent_id: str, session_id: str):
+        frontend_api().unsubscribe(connection_id, agent_id, session_id)
+        logger.debug(f"Connection {connection_id} unsubscribed from {agent_id}[{session_id}]")
 
     async def handle_get_agents(self):
         """Handle get agents request from frontend"""
         try:
-            logger.info("🔄 [Backend] Starting handle_get_agents")
-            agent_configs = agent_manager().get_all_agent_configs()
-            logger.info(f"📥 [Backend] Retrieved {len(agent_configs)} agent configs")
-            agents = [agent.model_dump() for agent in agent_configs]
-            logger.info(f"📥 [Backend] Converted {len(agents)} agents to dict format")
-            logger.info(f"📥 [Backend] Agent data: {agents}")
-            await frontend_api().send_agent_list_update({"agents": agents})
-            logger.info("✅ [Backend] Successfully sent agent_list_update")
+            logger.debug("🔄 [Backend] Starting handle_get_agents")
+            agents = self._get_agents_dump()
+            logger.debug(f"📥 [Backend] Prepared {len(agents)} agents for broadcast")
+            await self._broadcast_agent_list()
         except Exception as e:
             logger.error(f"❌ [Backend] Error getting agents: {e}")
             import traceback
@@ -232,7 +234,7 @@ class BackendAPI:
             from schemas import AgentConfig
             agent_config = AgentConfig(**agent_data)
             agent_manager().add_agent(agent_config)
-            await frontend_api().send_agent_list_update({"action": "created", "agent": agent_config.model_dump()})
+            await self._broadcast_agent_list("created", agent=agent_config.model_dump())
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
             import traceback
@@ -246,7 +248,7 @@ class BackendAPI:
             from schemas import AgentConfig
             agent_config = AgentConfig(**agent_data)
             agent_manager().update_agent(agent_config)
-            await frontend_api().send_agent_list_update({"action": "updated", "agent": agent_config.model_dump()})
+            await self._broadcast_agent_list("updated", agent=agent_config.model_dump())
         except Exception as e:
             logger.error(f"Error updating agent {agent_id}: {e}")
             import traceback
@@ -258,7 +260,7 @@ class BackendAPI:
         """Handle delete agent request from frontend"""
         try:
             agent_manager().delete_agent(agent_id)
-            await frontend_api().send_agent_list_update({"action": "deleted", "agent_id": agent_id})
+            await self._broadcast_agent_list("deleted", agent_id=agent_id)
         except Exception as e:
             logger.error(f"Error deleting agent {agent_id}: {e}")
             import traceback
@@ -411,18 +413,11 @@ class BackendAPI:
             logger.error(f"Error saving conversation for {agent_id}/{session_id}: {e}")
             raise
 
-    async def handle_list_conversations(self, agent_id: str):
+    async def handle_list_conversations(self, agent_id: str, session_id: str):
         try:
             sessions = agent_manager().list_conversations(agent_id)
-            # Send to frontend
-            message = {
-                "type": "conversation_list",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": agent_id,
-                "data": {"sessions": sessions},
-            }
-            await frontend_api().send_to_agent(agent_id, message)
+            from schemas import SessionRef
+            await frontend_api().send_to_agent(SessionRef(agent_id=agent_id, session_id=session_id, agent_name=agent_manager().get_agent_config(agent_id).name)).conversation_list(sessions)
         except Exception as e:
             logger.error(f"Error listing conversations for {agent_id}: {e}")
             raise
@@ -432,16 +427,11 @@ class BackendAPI:
             snapshot = agent_manager().load_conversation(agent_id, session_id)
             # After loading, send a conversation snapshot and a session switch
             # Send session_created to switch session on UI
-            await frontend_api().send_session_created(agent_id, snapshot["session_id"])
+            from schemas import SessionRef
+            await frontend_api().send_session_created(SessionRef(agent_id=agent_id, session_id=snapshot["session_id"], agent_name=agent_manager().get_agent_config(agent_id).name))
             # Send full snapshot
-            message = {
-                "type": "conversation_snapshot",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": agent_id,
-                "data": snapshot,
-            }
-            await frontend_api().send_to_agent(agent_id, message)
+            from schemas import SessionRef
+            await frontend_api().send_to_agent(SessionRef(agent_id=agent_id, session_id=snapshot["session_id"], agent_name=agent_manager().get_agent_config(agent_id).name)).conversation_snapshot(snapshot)
         except Exception as e:
             logger.error(f"Error loading conversation for {agent_id}/{session_id}: {e}")
             raise
@@ -456,7 +446,7 @@ class BackendAPI:
             if not isinstance(percent, (int, float)) or percent < 0 or percent > 100:
                 raise ValueError("percentage must be a number between 0 and 100")
 
-            agent = _am().get_agent_by_session(session_id)
+            agent = _am().get_agent_by_id_and_session(agent_id, session_id)
             # Count only non-system/non-seed conversation messages
             convo_msgs = [m for m in agent.messages if m.message_type.value != "SYSTEM"]
             N = int((percent / 100.0) * len(convo_msgs))
@@ -482,7 +472,11 @@ class BackendAPI:
             temp_context = "\n\n".join(temp_parts + [f"User: {summary_prompt}"])
 
             # Call model to summarize
-            result_text = agent.model.prompt(temp_context).text()
+            if not getattr(agent, 'model', None):
+                raise RuntimeError("Agent model is not initialized")
+            from typing import Any
+            model: Any = agent.model
+            result_text = model.prompt(temp_context).text()
 
             # Replace first N messages in real conversation with a single summary message
             # Map back to original indices to preserve system/seed
@@ -520,13 +514,15 @@ class BackendAPI:
             # Recompute context usage and send updates
             try:
                 context_usage = agent._calculate_context_usage()
-                await frontend_api().send_context_update(agent.config.id, context_usage)
+                from schemas import SessionRef
+                await frontend_api().send_to_agent(SessionRef(agent_id=agent.config.id, session_id=session_id, agent_name=agent.config.name)).context_update(context_usage)
             except Exception:
                 pass
 
             # Send full snapshot
             messages_dump = [m.model_dump() for m in agent.messages]
-            await frontend_api().send_conversation_snapshot(agent.config.id, {"session_id": session_id, "messages": messages_dump})
+            from schemas import SessionRef
+            await frontend_api().send_to_agent(SessionRef(agent_id=agent.config.id, session_id=session_id, agent_name=agent.config.name)).conversation_snapshot({"session_id": session_id, "messages": messages_dump})
             # Observability: log summarize inputs and outcome
             try:
                 logger.info(f"Summarize: agent={agent_id} percent={percent} N={N} new_msgs={len(agent.messages)}")

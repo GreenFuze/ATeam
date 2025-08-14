@@ -4,7 +4,7 @@ import {
   Modal, Title, TextInput, Textarea, Select, NumberInput,
   Switch, Button, Group, Stack, Divider, Badge, ActionIcon, Card
 } from '@mantine/core';
-import { IconGripVertical, IconX } from '@tabler/icons-react';
+import { IconGripVertical, IconX, IconEye } from '@tabler/icons-react';
 import {
   DndContext,
   closestCenter,
@@ -26,13 +26,14 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { AgentConfig, CreateAgentRequest } from '../types';
 import { connectionManager } from '../services/ConnectionManager';
+import PromptEditor from './PromptEditor';
 
 interface SortablePromptItemProps {
   prompt: any;
   onRemove: (promptName: string) => void;
 }
 
-const SortablePromptItem: React.FC<SortablePromptItemProps & { disabled?: boolean; canRemove?: boolean; }> = ({ prompt, onRemove, disabled = false, canRemove = true }) => {
+const SortablePromptItem: React.FC<SortablePromptItemProps & { disabled?: boolean; canRemove?: boolean; onView?: (promptName: string) => void; }> = ({ prompt, onRemove, disabled = false, canRemove = true, onView }) => {
   const {
     attributes,
     listeners,
@@ -71,16 +72,30 @@ const SortablePromptItem: React.FC<SortablePromptItemProps & { disabled?: boolea
             </div>
           </div>
         </Group>
-        {!canRemove ? null : (
-        <ActionIcon
-          variant="subtle"
-          color="red"
-          size="sm"
-          onClick={() => onRemove(prompt.name)}
-        >
-          <IconX size={16} />
-        </ActionIcon>
-        )}
+        <Group gap="xs">
+          {onView && (
+            <ActionIcon
+              variant="subtle"
+              color="gray"
+              size="sm"
+              onClick={() => onView(prompt.name)}
+              title="View/Edit"
+            >
+              <IconEye size={16} />
+            </ActionIcon>
+          )}
+          {!canRemove ? null : (
+            <ActionIcon
+              variant="subtle"
+              color="red"
+              size="sm"
+              onClick={() => onRemove(prompt.name)}
+              title="Remove"
+            >
+              <IconX size={16} />
+            </ActionIcon>
+          )}
+        </Group>
       </Group>
     </Card>
   );
@@ -120,6 +135,8 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
   });
 
   const [selectedPromptToAdd, setSelectedPromptToAdd] = useState<string>('');
+  const [editPromptModal, setEditPromptModal] = useState(false);
+  const [selectedPrompt, setSelectedPrompt] = useState<any | null>(null);
   const mandatoryPrompt = 'all_agents.md';
   const mandatoryTools = new Set([
     'kb_add','kb_update','kb_get','kb_list','kb_search',
@@ -309,6 +326,12 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
     }));
   };
 
+  const handleViewPrompt = (promptName: string) => {
+    const p = prompts.find(pr => pr.name === promptName) || null;
+    setSelectedPrompt(p);
+    setEditPromptModal(true);
+  };
+
   return (
     <Modal
       opened={opened}
@@ -424,6 +447,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
               value={selectedPromptToAdd}
               onChange={(value) => setSelectedPromptToAdd(value || '')}
               style={{ flex: 1 }}
+              searchable
             />
             <Button
               onClick={handleAddPrompt}
@@ -457,6 +481,7 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
                         onRemove={handleRemovePrompt}
                         disabled={promptName === mandatoryPrompt}
                         canRemove={promptName !== mandatoryPrompt}
+                        onView={handleViewPrompt}
                       />
                     );
                   })}
@@ -529,6 +554,32 @@ const AgentSettingsModal: React.FC<AgentSettingsModalProps> = ({
           </Button>
         </Group>
       </Stack>
+      {/* Prompt Editor Modal for viewing/editing selected prompt */}
+      <PromptEditor
+        prompt={selectedPrompt}
+        isOpen={editPromptModal}
+        onClose={() => {
+          setEditPromptModal(false);
+          setSelectedPrompt(null);
+        }}
+        onSave={async (promptData) => {
+          try {
+            if (selectedPrompt) {
+              connectionManager.sendUpdatePrompt(selectedPrompt.name, promptData);
+              // Optimistically update local list for preview
+              setPrompts(prev => prev.map(p => p.name === selectedPrompt.name ? { ...p, ...promptData } : p));
+            }
+            setEditPromptModal(false);
+            setSelectedPrompt(null);
+            // Optionally refresh prompts list
+            connectionManager.sendGetPrompts();
+          } catch (error) {
+            console.error('Error saving prompt:', error);
+          }
+        }}
+        onDelete={async () => { /* not exposed in this modal */ }}
+        loading={false}
+      />
     </Modal>
   );
 };
