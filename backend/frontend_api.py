@@ -201,13 +201,16 @@ class FrontendAPI:
             )
             await self._api._send_to_agent_message(self._ref, msg.model_dump())
 
-        async def agent_response(self, response: LLMResponse) -> None:
+        async def agent_response(self, response: LLMResponse, context_usage: ContextUsageData) -> None:
             if response.metadata and response.metadata.get("already_sent"):
                 return
             assert response.message_type is not None, "response.message_type is required"
             msg_type_value = response.message_type.value
             if getattr(response, 'icon', None) == MessageIcon.ERROR:
                 msg_type_value = MessageType.ERROR.value
+
+            # Send context update first
+            await self._context_update(context_usage)
 
             data: Dict[str, Any] = {
                 "content": response.content,
@@ -269,7 +272,7 @@ class FrontendAPI:
             }
             await self._api._send_to_agent_message(self._ref, message)
 
-        async def context_update(self, context_data: ContextUsageData) -> None:
+        async def _context_update(self, context_data: ContextUsageData) -> None:
             message = {
                 "type": "context_update",
                 "message_id": f"msg_{datetime.now().timestamp()}",

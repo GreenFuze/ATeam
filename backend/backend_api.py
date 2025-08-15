@@ -154,8 +154,9 @@ class BackendAPI:
         """Handle chat message from frontend (async)"""
         try:
             agent = agent_manager().get_agent_by_id_and_session(agent_id, session_id)
-            response = await agent.get_response_for_session(session_id, message)
-            # Response is sent via FrontendAPI in agent.get_response()
+            # Enqueue message to agent's queue instead of direct call
+            agent._schedule(agent.send_to_llm(message))
+            # Response will be sent via FrontendAPI in agent.send_to_llm()
         except Exception as e:
             import traceback
             logger.error(f"❌ Error in chat message for {agent_id}: {e}\nTraceback: {traceback.format_exc()}")
@@ -448,7 +449,8 @@ class BackendAPI:
 
             agent = _am().get_agent_by_id_and_session(agent_id, session_id)
             # Count only non-system/non-seed conversation messages
-            convo_msgs = [m for m in agent.messages if m.message_type.value != "SYSTEM"]
+            from schemas import MessageType
+            convo_msgs = [m for m in agent.history.get_messages() if m.message_type != MessageType.SYSTEM]
             N = int((percent / 100.0) * len(convo_msgs))
             if N <= 0:
                 await frontend_api().send_notification("warning", "Nothing to summarize for the selected percentage")
@@ -483,8 +485,8 @@ class BackendAPI:
             def find_indices_to_replace() -> list[int]:
                 idxs = []
                 seen = 0
-                for i, m in enumerate(agent.messages):
-                    if m.message_type.value != "SYSTEM":
+                for i, m in enumerate(agent.history.get_messages()):
+                    if m.message_type != MessageType.SYSTEM:
                         if seen < N:
                             idxs.append(i)
                             seen += 1
@@ -499,11 +501,11 @@ class BackendAPI:
             first_idx = replace_idxs[0]
             # Pop from end to start
             for i in sorted(replace_idxs, reverse=True):
-                agent.messages.pop(i)
+                agent.history.pop(i)
             from schemas import Message as _Msg
             from datetime import datetime as _dt
             import uuid as _uuid
-            agent.messages.insert(first_idx, _Msg(
+            agent.history.insert(first_idx, _Msg(
                 id=str(_uuid.uuid4()),
                 agent_id=agent.config.id,
                 content=result_text,
@@ -511,21 +513,13 @@ class BackendAPI:
                 timestamp=_dt.now().isoformat(),
             ))
 
-            # Recompute context usage and send updates
-            try:
-                context_usage = agent._calculate_context_usage()
-                from schemas import SessionRef
-                await frontend_api().send_to_agent(SessionRef(agent_id=agent.config.id, session_id=session_id, agent_name=agent.config.name)).context_update(context_usage)
-            except Exception:
-                pass
-
             # Send full snapshot
-            messages_dump = [m.model_dump() for m in agent.messages]
+            messages_dump = [m.model_dump() for m in agent.history.get_messages()]
             from schemas import SessionRef
             await frontend_api().send_to_agent(SessionRef(agent_id=agent.config.id, session_id=session_id, agent_name=agent.config.name)).conversation_snapshot({"session_id": session_id, "messages": messages_dump})
             # Observability: log summarize inputs and outcome
             try:
-                logger.info(f"Summarize: agent={agent_id} percent={percent} N={N} new_msgs={len(agent.messages)}")
+                logger.info(f"Summarize: agent={agent_id} percent={percent} N={N} new_msgs={len(agent.history)}")
             except Exception:
                 pass
         except Exception as e:

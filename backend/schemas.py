@@ -8,6 +8,7 @@ class UnknownActionError(Exception):
     pass
 
 class MessageType(str, Enum):
+    USER_MESSAGE = "USER_MESSAGE"
     CHAT_RESPONSE = "CHAT_RESPONSE"
     CHAT_RESPONSE_WAIT_USER_INPUT = "CHAT_RESPONSE_WAIT_USER_INPUT"
     CHAT_RESPONSE_CONTINUE_WORK = "CHAT_RESPONSE_CONTINUE_WORK"
@@ -43,6 +44,12 @@ class ChatResponse(StructuredResponse):
     action: str = Field(default="CHAT_RESPONSE")
     content: str
     icon: Optional[MessageIcon] = None
+
+class ErrorChatResponse(ChatResponse):
+    def __init__(self, error: Exception | str):
+        content = f"Error: {str(error)}"
+        # Default reasoning per spec
+        super().__init__(content=content, reasoning="An error has occurred; details are in the content.", icon=MessageIcon.ERROR)
 
 class ToolCallResponse(StructuredResponse):
     action: str = Field(default="TOOL_CALL")
@@ -150,6 +157,20 @@ class Message(BaseModel):
     action: Optional[str] = None
     reasoning: Optional[str] = None
 
+    @classmethod
+    def create_user_message(cls, agent_id: str, content: str) -> 'Message':
+        """Create a user message for the specified agent"""
+        import uuid
+        from datetime import datetime
+        
+        return cls(
+            id=str(uuid.uuid4()),
+            agent_id=agent_id,
+            content=content,
+            message_type=MessageType.USER_MESSAGE,
+            timestamp=datetime.now().isoformat()
+        )
+
 class ChatSession(BaseModel):
     id: str
     agent_id: str
@@ -170,6 +191,25 @@ class LLMResponse(BaseModel):
     tool_name: Optional[str] = None
     tool_parameters: Optional[Dict[str, Any]] = None
     target_agent_id: Optional[str] = None
+
+    def as_message_to_agent(self, agent_id: str) -> 'Message':
+        """Convert this LLMResponse to a Message for the specified agent"""
+        import uuid
+        from datetime import datetime
+        
+        return Message(
+            id=str(uuid.uuid4()),
+            agent_id=agent_id,
+            content=self.content,
+            message_type=(MessageType.ERROR if self.icon == MessageIcon.ERROR else self.message_type),
+            timestamp=datetime.now().isoformat(),
+            metadata=self.metadata,
+            action=self.action,
+            reasoning=self.reasoning,
+            tool_name=self.tool_name,
+            tool_parameters=self.tool_parameters,
+            target_agent_id=self.target_agent_id
+        )
 
 class SessionRef(BaseModel):
     agent_id: str = Field(min_length=1)
@@ -288,15 +328,6 @@ class ConversationResponseData(BaseModel):
     context_window: Optional[int] = Field(None, ge=0, description="Total context window size")
     messages_to_send: List[LLMResponse] = Field(default_factory=list, description="Messages to send to frontend")
 
-class AgentInfo(BaseModel):
-    """Agent information returned by Agent class"""
-    id: str
-    name: str
-    description: str
-    model: str
-    tools: List[str] = Field(default_factory=list, description="List of tool names")
-    conversation_initialized: bool = False
-
 class ConversationData(BaseModel):
     """Conversation data for persistence"""
     session_id: str
@@ -305,5 +336,121 @@ class ConversationData(BaseModel):
     model: str
     created_at: str
     responses: List[Dict[str, Any]] = Field(default_factory=list, description="List of conversation responses")
+
+class SafeList:
+    """Thread-safe list wrapper with proper locking for all operations"""
+    
+    def __init__(self):
+        import threading
+        self._list = []
+        self._lock = threading.RLock()
+    
+    def append(self, item) -> None:
+        """Thread-safe append"""
+        with self._lock:
+            self._list.append(item)
+    
+    def clear(self) -> None:
+        """Thread-safe clear"""
+        with self._lock:
+            self._list.clear()
+    
+    def copy(self) -> list:
+        """Thread-safe copy"""
+        with self._lock:
+            return self._list.copy()
+    
+    def __len__(self) -> int:
+        """Thread-safe length"""
+        with self._lock:
+            return len(self._list)
+    
+    def __iter__(self):
+        """Thread-safe iteration (returns a copy to avoid holding lock during iteration)"""
+        with self._lock:
+            return iter(self._list.copy())
+    
+    def __getitem__(self, index):
+        """Thread-safe indexing"""
+        with self._lock:
+            return self._list[index]
+    
+    def __setitem__(self, index, value):
+        """Thread-safe assignment"""
+        with self._lock:
+            self._list[index] = value
+    
+    def extend(self, items) -> None:
+        """Thread-safe extend"""
+        with self._lock:
+            self._list.extend(items)
+    
+    def insert(self, index, item) -> None:
+        """Thread-safe insert"""
+        with self._lock:
+            self._list.insert(index, item)
+    
+    def pop(self, index=-1):
+        """Thread-safe pop"""
+        with self._lock:
+            return self._list.pop(index)
+    
+    def remove(self, item) -> None:
+        """Thread-safe remove"""
+        with self._lock:
+            self._list.remove(item)
+    
+    def reverse(self) -> None:
+        """Thread-safe reverse"""
+        with self._lock:
+            self._list.reverse()
+    
+    def sort(self, key=None, reverse=False) -> None:
+        """Thread-safe sort"""
+        with self._lock:
+            self._list.sort(key=key, reverse=reverse)
+
+class MessageHistory:
+    """Thread-safe conversation history management"""
+    
+    def __init__(self, agent_id: str):
+        self._messages = SafeList()
+        self._agent_id = agent_id
+    
+    def append_llm_response(self, llm_response: 'LLMResponse') -> None:
+        """Append LLM response as message"""
+        message = llm_response.as_message_to_agent(self._agent_id)
+        self._messages.append(message)
+    
+    def append_user_message(self, content: str) -> None:
+        """Append user message"""
+        message = Message.create_user_message(self._agent_id, content)
+        self._messages.append(message)
+    
+    def append_existing_message(self, message: 'Message') -> None:
+        """Append an existing message (for loading from history)"""
+        self._messages.append(message)
+    
+    def get_messages(self) -> List['Message']:
+        """Get copy of all messages"""
+        return self._messages.copy()
+    
+    def clear(self) -> None:
+        """Clear all messages"""
+        self._messages.clear()
+    
+    def __len__(self) -> int:
+        return len(self._messages)
+    
+    def __iter__(self):
+        return iter(self._messages)
+    
+    def pop(self, index: int) -> 'Message':
+        """Remove and return message at index"""
+        return self._messages.pop(index)
+    
+    def insert(self, index: int, message: 'Message') -> None:
+        """Insert message at index"""
+        self._messages.insert(index, message)
 
  

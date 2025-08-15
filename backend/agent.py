@@ -8,6 +8,7 @@ import json
 import logging
 import uuid
 import threading
+import asyncio
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
@@ -17,11 +18,11 @@ from pydantic import ValidationError
 from sympy import Q
 import schemas as schemas_module
 from schemas import (
-    AgentConfig, Message, MessageType, MessageIcon, LLMResponse, AgentInfo, 
+    AgentConfig, Message, MessageType, MessageIcon, LLMResponse, 
     ConversationData, SeedMessage,
     StructuredResponseType, ChatResponse, ToolCallResponse, ToolReturnResponse,
     AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, RefinementResponse,
-    UnknownActionError, SessionRef,
+    UnknownActionError, SessionRef, MessageHistory, PromptType,
 )
 from notification_utils import log_error, log_warning, log_info
 
@@ -37,11 +38,10 @@ class Agent:
     def __init__(self, agent_config: AgentConfig):
         self.config = agent_config
         # Initialize conversation components
-        self.messages: List[Message] = []  # Custom message history
+        self.history: MessageHistory = MessageHistory(self.id)  # Thread-safe conversation history
         self.system_prompt = ""  # Single combined system prompt
         self.seed_messages: List[SeedMessage] = []  # List of seed messages
         self.model = None  # LLM model instance
-        self._lock = threading.RLock()
         # Generate a deterministic session id for this instance; no I/O here
         self.session_id: str = f"{self.name}_{uuid.uuid4().hex[:8]}"
         self.session_ref: SessionRef = SessionRef(
@@ -50,6 +50,11 @@ class Agent:
             agent_name=self.name,
         )
         self._connection_established: bool = False
+        
+        # Agent-level task queue for sequential processing
+        self._task_queue = None  # Will be initialized when first task is scheduled
+        self._worker_task = None  # Worker coroutine for processing tasks
+        self._llm_lock = asyncio.Lock()  # Lock for send_to_llm to prevent race conditions
         
         # Load prompts and initialize conversation
         self._load_prompts()
@@ -66,6 +71,10 @@ class Agent:
     @property
     def name(self) -> str:
         return self.config.name
+    
+    @property
+    def tools(self) -> List[str]:
+        return self.config.tools
     
     @property
     def full_system_prompt(self) -> str:
@@ -97,282 +106,71 @@ class Agent:
         self._connection_established = True
         return self.session_ref
     
-    async def get_response(self, message: str) -> LLMResponse:
-        """Get a response from the agent and send via FrontendAPI"""
-        if not self.model:
-            raise RuntimeError(f"Could not initialize model for agent '{self.config.name}'")
+    
+    async def send_to_llm(self, message: str) -> LLMResponse:
+        """Send a message to the LLM and get a response.
         
-        # Add user message to conversation history
-        user_message = Message(
-            id=str(uuid.uuid4()),
-            agent_id=self.id,
-            content=message,
-            message_type=MessageType.CHAT_RESPONSE,
-            timestamp=datetime.now().isoformat()
-        )
-        with self._lock:
-            self.messages.append(user_message)
-        
-        # Build complete conversation context
-        context = self._build_conversation_context(message)
-        
-        # Response format instructions are already included in system prompt during agent initialization
-        
-        # Get response from LLM (stream if supported)
-        try:
-            response = self.model.prompt(context, stream=True)
-            streamed_text_parts: list[str] = []
-            try:
-                # If response is iterable/generator, stream chunks
-                from objects_registry import frontend_api
-                announced_action = False
-                for chunk in response:
-                    if not chunk:
-                        continue
-                    
-                    text_piece = getattr(chunk, 'text', None)
-                    text_piece = text_piece() if callable(text_piece) else (text_piece if isinstance(text_piece, str) else str(chunk))
-                    if text_piece:
-                        streamed_text_parts.append(text_piece)
-                        # Try to detect action early from accumulated JSON buffer
-                        if not announced_action:
-                            buf = "".join(streamed_text_parts)
-                            # Fast-path: look for \"action\": \"...\"
-                            import re
-                            m = re.search(r"\"action\"\s*:\s*\"([A-Z_]+)\"", buf)
-                            if m:
-                                announced_action = True
-                                await frontend_api().send_to_agent(self.session_ref).stream_start(m.group(1))
-                        # send delta to frontend
-                        await frontend_api().send_to_agent(self.session_ref).stream(text_piece)
-                response_text = "".join(streamed_text_parts) if streamed_text_parts else ""
-                if not response_text:
-                    # Fallback if nothing streamed
-                    response_text = response.text()
-            except TypeError:
-                # Stream not supported; fall back to full text
-                response_text = response.text()
-                
-                
+        This method handles the complete flow:
+        1. Appends user message to history
+        2. Builds conversation context
+        3. Prompts the LLM
+        4. Handles structured response parsing
+        5. Appends response to history
+        6. Sends response to frontend
+        """
+        async with self._llm_lock:  # Prevent race conditions
+            if not self.model:
+                raise RuntimeError(f"Could not initialize model for agent '{self.config.name}'")
+            
+            # Add user message to conversation history
+            self.history.append_user_message(message)
+            
+            # Build complete conversation context
+            context = self._build_conversation_context(message)
+            
+            # Response format instructions are already included in system prompt during agent initialization
+            
+            # Get response from LLM (stream if supported)
+            response_text = await self._prompt_and_stream(context)
             logger.info(f"🔍 DEBUG: Raw LLM response: {response_text}")
-        except Exception as e:
-            raise RuntimeError(f"Error getting response from LLM: {str(e)}")
-        
-        # Parse structured response
-        try:
-            structured_response = self._parse_llm_response(response_text)
-        except UnknownActionError as e:
-            logger.error(f"❌ DEBUG: Illegal action from LLM. Error: {e}\nResponse text was:\n{response_text}")
+            
+            # Parse structured response from LLM
+            try:
+                structured_response = self._parse_llm_response(response_text)
+            except UnknownActionError as e:
+                logger.error(f"❌ DEBUG: Illegal action from LLM. Error: {e}\nResponse text was:\n{response_text}")
 
-            # Build explicit illegal-action error message
-            error_text = f"Error: Illegal action from LLM. {str(e)}"
-            structured_response = ChatResponse(
-                action="CHAT_RESPONSE",
-                reasoning=f"{str(e)}",
-                content=error_text,
-                icon=MessageIcon.ERROR
-            )
-            from objects_registry import frontend_api
-            await frontend_api().send_to_agent(self.session_ref).agent_response(LLMResponse(
-                content=error_text,
-                message_type=MessageType.ERROR,
-                metadata={
-                    "model": self.config.model,
-                    "agent_id": self.id,
-                    "action": "AGENT_RETURN",
-                    "error": str(e),
-                },
-                action="AGENT_RETURN",
-                reasoning=str(e),
-            ))
-        except ValueError as e:
-            logger.error(f"❌ DEBUG: Failed to parse LLM response. Error: {e}\nResponse text was:\n{response_text}")
+                # Build explicit illegal-action error message
+                from schemas import ErrorChatResponse
+                structured_response = ErrorChatResponse(e)
+            except ValueError as e:
+                logger.error(f"❌ DEBUG: Failed to parse LLM response. Error: {e}\nResponse text was:\n{response_text}")
 
-            # If parsing fails OR illegal action, respond with an ERROR-flavored ChatResponse and send immediately to frontend
-            error_text = f"Error: The AI response could not be parsed properly.\n\nRaw response:\n{response_text}\n\nError details: {str(e)}"
-
-            structured_response = ChatResponse(
-                action="CHAT_RESPONSE",
-                reasoning=f"{str(e)}",
-                content=error_text,
-                icon=MessageIcon.ERROR
-            )
+                # If parsing fails, respond with an ERROR-flavored ChatResponse
+                from schemas import ErrorChatResponse
+                structured_response = ErrorChatResponse(e)
+            
+            # Handle the LLM response (UI)
+            llm_response = await self._handle_structured_response(structured_response)
+            self.history.append_llm_response(llm_response)
+            
+            # Calculate context usage and send response via FrontendAPI (fail-fast)
+            context_usage = self._calculate_context_usage()
             
             from objects_registry import frontend_api
-            await frontend_api().send_to_agent(self.session_ref).agent_response(LLMResponse(
-                content=error_text,
-                message_type=MessageType.ERROR,
-                metadata={
-                    "model": self.config.model,
-                    "agent_id": self.id,
-                    "action": "AGENT_RETURN",
-                    "error": str(e),
-                },
-                action="AGENT_RETURN",
-                reasoning=str(e),
-            ))
-        
-        # Handle the structured response
-        llm_response = await self._handle_structured_response(structured_response)
-        
-        # Add agent response to conversation history
-        agent_message = Message(
-            id=str(uuid.uuid4()),
-            agent_id=self.id,
-            content=llm_response.content,
-            message_type=(MessageType.ERROR if llm_response.icon == MessageIcon.ERROR else llm_response.message_type),
-            timestamp=datetime.now().isoformat(),
-            metadata=llm_response.metadata,
-            action=llm_response.action,
-            reasoning=llm_response.reasoning,
-            tool_name=llm_response.tool_name,
-            tool_parameters=llm_response.tool_parameters,
-            target_agent_id=llm_response.target_agent_id
-        )
-        with self._lock:
-            self.messages.append(agent_message)
-        
-        # Auto-chaining policy:
-        # - Continue only after TOOL_CALL (to capture TOOL_RETURN and react)
-        # - For AGENT_CALL/AGENT_DELEGATE, STOP and wait for AGENT_RETURN
-        # - For CHAT_RESPONSE_CONTINUE_WORK, we continue work explicitly below
-        should_autochain = (
-            agent_message.message_type == MessageType.TOOL_RETURN or
-            agent_message.message_type == MessageType.TOOL_CALL
-        )
-        if should_autochain:
-            # Prompt the LLM to react to the latest non-chat message (fail-fast on errors)
-                follow_up = (
-                    f"System: You previously produced a {agent_message.message_type.value} with action='{agent_message.action}'. "
-                    f"Please continue with a valid next action in strict JSON (see system prompt)."
-                )
-                return await self.get_response(follow_up)
-        
-        # If the model asked to continue work without the user, do a single follow-up prompt.
-        if agent_message.action == MessageType.CHAT_RESPONSE_CONTINUE_WORK.value:
-            return await self.get_response("System: Continue your planned work. Produce exactly one next action.")
-        
-        # Calculate context usage and send update (fail-fast)
-        context_usage = self._calculate_context_usage()
-        
-        from objects_registry import frontend_api
-        await frontend_api().send_to_agent(self.session_ref).context_update(context_usage)
-        
-        # Send response via FrontendAPI (fail-fast)
-        await frontend_api().send_to_agent(self.session_ref).agent_response(llm_response)
-        
-        return llm_response
-
-    async def get_response_for_session(self, session_id: str, message: str) -> LLMResponse:
-        """Deprecated: Agent instances are single-session. Use get_response(message)."""
-        if session_id != self.session_id:
-            raise RuntimeError("Mismatched session: agent instance is bound to a different session_id")
-        return await self.get_response(message)
+            await frontend_api().send_to_agent(self.session_ref).agent_response(llm_response, context_usage)
+            
+            return llm_response
+    
     
     def get_conversation_history(self) -> List[Message]:
         """Get the conversation history as Message objects"""
-        with self._lock:
-            return self.messages.copy()
-    
-    def save_conversation(self, session_id: str) -> None:
-        """Save conversation to agent_history directory"""
-        # Create agent_history directory if it doesn't exist
-        history_dir = Path("agent_history")
-        history_dir.mkdir(exist_ok=True)
-        
-        # Create agent-specific directory
-        agent_dir = history_dir / self.id
-        agent_dir.mkdir(exist_ok=True)
-        
-        # Save conversation data
-        conversation_data = ConversationData(
-            session_id=session_id,
-            agent_id=self.id,
-            agent_name=self.name,
-            model=self.config.model,
-            created_at=datetime.now().isoformat(),
-            responses=[]
-        )
-        
-        # Convert messages to serializable format using Pydantic
-        for message in self.messages:
-            response_data = message.model_dump()
-            conversation_data.responses.append(response_data)
-        
-        # Save to JSON file
-        file_path = agent_dir / f"{session_id}.json"
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(conversation_data.model_dump(), f, indent=2, default=str)
-    
-    def load_conversation(self, session_id: str) -> bool:
-        """Load conversation from agent_history directory"""
-        # Check if conversation file exists
-        history_dir = Path("agent_history")
-        agent_dir = history_dir / self.id
-        file_path = agent_dir / f"{session_id}.json"
-        
-        if not file_path.exists():
-            return False
-        
-        # Load conversation data using Pydantic
-        with open(file_path, 'r', encoding='utf-8') as f:
-            conversation_data_dict = json.load(f)
-        
-        # Parse using Pydantic model
-        conversation_data = ConversationData.model_validate(conversation_data_dict)
-        
-        # Clear current messages
-        with self._lock:
-            self.messages = []
-        
-        # Load messages from file using Pydantic
-        for response_data in conversation_data.responses:
-            message = Message.model_validate(response_data)
-            self.messages.append(message)
-        
-        return True
+        return self.history.get_messages()
     
     def clear_conversation(self) -> None:
         """Clear the current conversation"""
-        self.messages = []
+        self.history.clear()
     
-    def get_agent_info(self) -> AgentInfo:
-        """Get agent information"""
-        return AgentInfo(
-            id=self.id,
-            name=self.name,
-            description=self.config.description,
-            model=self.config.model,
-            tools=self.config.tools,
-            conversation_initialized=len(self.messages) > 0
-        )
-    
-    def get_available_sessions(self) -> List[str]:
-        """Get list of available session IDs"""
-        history_dir = Path("agent_history")
-        agent_dir = history_dir / self.id
-        
-        if not agent_dir.exists():
-            return []
-        
-        sessions = []
-        for file_path in agent_dir.glob("*.json"):
-            session_id = file_path.stem
-            sessions.append(session_id)
-        
-        return sessions
-    
-    def delete_session(self, session_id: str) -> bool:
-        """Delete a specific session"""
-        history_dir = Path("agent_history")
-        agent_dir = history_dir / self.id
-        file_path = agent_dir / f"{session_id}.json"
-        
-        if file_path.exists():
-            file_path.unlink()
-            return True
-        
-        return False
     def _load_prompts(self):
         """Load system prompts and seed messages from prompt manager"""
         # Lazy import to avoid circular dependency
@@ -389,10 +187,10 @@ class Agent:
             if not prompt_config:
                 raise ValueError(f"Prompt '{prompt_name}' not found for agent '{self.config.name}'")
             
-            if prompt_config.type.value == "system":
+            if prompt_config.type == PromptType.SYSTEM:
                 # Collect system prompts
                 system_prompts.append(prompt_config.content)
-            elif prompt_config.type.value == "seed":
+            elif prompt_config.type == PromptType.SEED:
                 # Parse and collect seed prompt messages
                 seed_messages.extend(prompt_manager().parse_seed_prompt(prompt_name))
             else:
@@ -423,9 +221,11 @@ class Agent:
     
     def _fill_conversation_history(self, context_parts: List[str] = []) -> List[str]:
         # Add conversation history
-        for message in self.messages:
-            if message.message_type == MessageType.CHAT_RESPONSE:
+        for message in self.history:
+            if message.message_type == MessageType.USER_MESSAGE:
                 context_parts.append(f"User: {message.content}")
+            elif message.message_type == MessageType.CHAT_RESPONSE:
+                context_parts.append(f"Assistant: {message.content}")
             elif message.message_type == MessageType.SYSTEM:
                 context_parts.append(f"System: {message.content}")
             elif message.message_type == MessageType.TOOL_CALL:
@@ -450,8 +250,8 @@ class Agent:
         from objects_registry import tool_manager
         
         # Add available tools information as part of system prompt
-        if self.config.tools:
-            return tool_manager().get_tool_prompt_for_agent(self.config.tools)
+        if self.tools:
+            return tool_manager().get_tool_prompt_for_agent(self.tools)
         
         return None
                 
@@ -514,17 +314,17 @@ class Agent:
         sanitized = "\n".join(
             re.sub(r"\s*,?\s*<--.*$", "", line) for line in response_text.splitlines()
         )
-        
-            # Remove trailing commas before object/array closers
+
+        # Remove trailing commas before object/array closers
         sanitized = re.sub(r",\s*([}\]])", r"\1", sanitized)
-        
-            # Trim whitespace
+
+        # Trim whitespace
         sanitized = sanitized.strip()
         
         # Parse as JSON (fail fast on errors)
         response_data = json.loads(sanitized.strip())
-            
-            # Validate and create appropriate response object
+        
+        # Validate and create appropriate response object
         from schemas import MessageType
         
         if 'action' not in response_data:
@@ -548,6 +348,8 @@ class Agent:
             MessageType.CHAT_RESPONSE_WAIT_USER_INPUT.value,
             MessageType.CHAT_RESPONSE_CONTINUE_WORK.value,
         ):
+            # Do not require explicit action for ChatResponse
+            response_data.pop("action", None)
             return ChatResponse(**response_data)
         
         elif action  == MessageType.TOOL_CALL.value:
@@ -594,7 +396,8 @@ class Agent:
         """
         async def _do_emit() -> None:
             from objects_registry import frontend_api
-            await frontend_api().send_to_agent(self.session_ref).agent_response(llm_response)
+            context_usage = self._calculate_context_usage()
+            await frontend_api().send_to_agent(self.session_ref).agent_response(llm_response, context_usage)
             llm_response.metadata["already_sent"] = True
         self._schedule(_do_emit())
 
@@ -626,7 +429,7 @@ class Agent:
             from objects_registry import frontend_api
             await frontend_api().send_to_agents(self.session_ref, target_instance.session_ref).delegation_announcement(reason_text)
 
-            await target_instance.get_response_for_session(target_ref.session_id, forwarded_input)
+            target_instance._schedule(target_instance.send_to_llm(forwarded_input))
 
         self._schedule(_do_delegate())
 
@@ -648,10 +451,10 @@ class Agent:
 
         await frontend_api().send_to_agents(self.session_ref, target_instance.session_ref).agent_call_announcement(reason_text)
 
-        target_response = await target_instance.get_response_for_session(
-            target_ref.session_id,
-            forwarded_input,
-        )
+        # Schedule the target agent's work and wait for result using a future
+        future = asyncio.Future()
+        target_instance._schedule(target_instance._send_to_llm_with_future(forwarded_input, future))
+        target_response = await future
 
         target_id = target_instance.id
 
@@ -670,24 +473,24 @@ class Agent:
             reasoning=target_response.reasoning or "",
         )
 
-        with self._lock:
-            self.messages.append(
-                Message(
-                    id=str(uuid.uuid4()),
-                    agent_id=self.id,
-                    content=return_msg.content,
-                    message_type=MessageType.AGENT_RETURN,
-                    timestamp=datetime.now().isoformat(),
-                    metadata=return_msg.metadata,
-                    action=return_msg.action,
-                    reasoning=return_msg.reasoning,
-                    target_agent_id=target_id,
-                )
+        self.history.append_existing_message(
+            Message(
+                id=str(uuid.uuid4()),
+                agent_id=self.id,
+                content=return_msg.content,
+                message_type=MessageType.AGENT_RETURN,
+                timestamp=datetime.now().isoformat(),
+                metadata=return_msg.metadata,
+                action=return_msg.action,
+                reasoning=return_msg.reasoning,
+                target_agent_id=target_id,
             )
+        )
 
         logger.info(f"🔁 AUTO-RET {target_id} -> {self.id}")
 
-        await frontend_api().send_to_agent(self.session_ref).agent_response(return_msg)
+        context_usage = self._calculate_context_usage()
+        await frontend_api().send_to_agent(self.session_ref).agent_response(return_msg, context_usage)
 
     # Common failure emitter
     def _send_failure_return(self, caller_session_id: str, reason: str, error_code: str) -> LLMResponse:
@@ -709,15 +512,48 @@ class Agent:
         )
         # Schedule send in background and return synchronously
         failure_response.metadata["already_sent"] = True
-        self._schedule(frontend_api().send_to_agent(self.session_ref).agent_response(failure_response))
+        context_usage = self._calculate_context_usage()
+        self._schedule(frontend_api().send_to_agent(self.session_ref).agent_response(failure_response, context_usage))
         return failure_response
 
+    # Agent-level task queue and worker
+    async def _start_worker(self):
+        """Start the agent's task worker if not already running"""
+        if self._worker_task is None:
+            import asyncio
+            self._task_queue = asyncio.Queue()
+            self._worker_task = asyncio.create_task(self._process_tasks())
+            logger.debug(f"Started worker for agent {self.id}")
+    
+    async def _process_tasks(self):
+        """Process tasks in order for this agent"""
+        while True:
+            try:
+                if self._task_queue is None:
+                    logger.error(f"Task queue is None for agent {self.id}")
+                    break
+                task = await self._task_queue.get()
+                await task
+                self._task_queue.task_done()
+            except Exception as e:
+                logger.error(f"Error in agent {self.id} task: {e}")
+                import traceback
+                logger.error(f"Traceback: {traceback.format_exc()}")
+    
     # Background scheduler
     def _schedule(self, coro):
+        """Schedule a task for this agent's queue"""
         import asyncio
-        # Fail-fast: require a running loop; never fallback to asyncio.run
-        loop = asyncio.get_running_loop()
-        loop.create_task(coro)
+        # Initialize worker if needed
+        if self._worker_task is None:
+            asyncio.create_task(self._start_worker())
+        # Add task to queue
+        if self._task_queue:
+            self._task_queue.put_nowait(coro)
+        else:
+            # Fallback to global scheduler if queue not ready
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
     
     async def _handle_structured_response(self, structured_response: StructuredResponseType) -> LLMResponse:
         """Handle different response actions"""
@@ -761,6 +597,24 @@ class Agent:
             icon=response.icon
         )
     
+    async def _send_to_llm_with_future(self, message: str, future: asyncio.Future):
+        """Send message to LLM and set the result in the future"""
+        try:
+            result = await self.send_to_llm(message)
+            future.set_result(result)
+        except Exception as e:
+            future.set_exception(e)
+    
+    async def _continue_after_tool(self, tool_name: str, tool_result: str):
+        """Continue conversation after tool execution (scheduled task)"""
+        try:
+            inner_response = await self.send_to_llm(f"Tool {tool_name} returned: {tool_result}")
+            # Mark as already sent to frontend by the inner call to avoid duplicate send
+            inner_response.metadata = {**(inner_response.metadata or {}), "already_sent": True}
+            logger.info(f"🔄 Tool continuation completed for {tool_name}")
+        except Exception as e:
+            logger.error(f"Error in tool continuation for {tool_name}: {e}")
+    
     async def _handle_tool_call(self, response: ToolCallResponse) -> LLMResponse:
         """Handle tool call - execute tool and continue conversation"""
         # Lazy import to avoid circular dependency
@@ -775,6 +629,7 @@ class Agent:
         logger.info(f"🛠️ TOOL_CALL {self.id} -> {response.tool} args={args_with_caller}")
         
         # Emit a TOOL_CALL message to frontend immediately (fail-fast)
+        context_usage = self._calculate_context_usage()
         await frontend_api().send_to_agent(self.session_ref).agent_response(
             LLMResponse(
                 content=f"Calling tool {response.tool}",
@@ -790,6 +645,7 @@ class Agent:
                 tool_name=response.tool,
                 tool_parameters=response.args,
             ),
+            context_usage,
         )
 
         # Add tool result to conversation
@@ -804,10 +660,10 @@ class Agent:
             action=tool_result.action,
             reasoning=""
         )
-        with self._lock:
-            self.messages.append(tool_message)
+        self.history.append_existing_message(tool_message)
 
         # Emit TOOL_RETURN to frontend as a separate message (fail-fast)
+        context_usage = self._calculate_context_usage()
         await frontend_api().send_to_agent(self.session_ref).agent_response(
             LLMResponse(
                 content=tool_result.result,
@@ -822,13 +678,27 @@ class Agent:
                 action="TOOL_RETURN",
                 tool_name=response.tool,
             ),
+            context_usage,
         )
         
-        # Continue conversation with tool result
-        inner_response = await self.get_response(f"Tool {response.tool} returned: {tool_result.result}")
-        # Mark as already sent to frontend by the inner call to avoid duplicate send in outer get_response
-        inner_response.metadata = {**(inner_response.metadata or {}), "already_sent": True}
-        return inner_response
+        # Schedule continuation with tool result instead of direct recursion
+        self._schedule(self._continue_after_tool(response.tool, tool_result.result))
+        
+        # Return immediate tool call response
+        return LLMResponse(
+            content=f"Tool {response.tool} executed successfully",
+            message_type=MessageType.TOOL_CALL,
+            metadata={
+                "model": self.config.model,
+                "agent_id": self.id,
+                "action": "TOOL_CALL",
+                "tool": response.tool,
+                "success": "True",
+                "scheduled_continuation": True,
+            },
+            action="TOOL_CALL",
+            tool_name=response.tool,
+        )
     
     def _handle_tool_return(self, response: ToolReturnResponse) -> LLMResponse:
         """Handle tool return - this should not happen in normal flow"""
@@ -880,6 +750,7 @@ class Agent:
                     response.reasoning,
                 )
             except Exception as e:
+                context_usage = self._calculate_context_usage()
                 await frontend_api().send_to_agent(self.session_ref).agent_response(
                     LLMResponse(
                         content=f"Delegation error: {str(e)}",
@@ -895,6 +766,7 @@ class Agent:
                 action="AGENT_RETURN",
                         reasoning=str(e),
                     ),
+                    context_usage,
                 )
                 raise
 
@@ -953,6 +825,7 @@ class Agent:
                     response.reasoning,
                 )
             except Exception as e:
+                context_usage = self._calculate_context_usage()
                 await frontend_api().send_to_agent(self.session_ref).agent_response(
                     LLMResponse(
                         content=f"Call error: {str(e)}",
@@ -968,6 +841,7 @@ class Agent:
                 action="AGENT_RETURN",
                         reasoning=str(e),
                     ),
+                    context_usage,
                 )
                 raise
 
@@ -1036,8 +910,7 @@ class Agent:
         
         # Get total conversation length in characters
         total_content = ""
-        with self._lock:
-            for message in self.messages:
+        for message in self.history:
                 total_content += message.content + " "
         
         # Add system prompts and tools to context calculation
@@ -1068,4 +941,44 @@ class Agent:
             percentage=percentage
         )
 
+    async def _prompt_and_stream(self, context: str) -> str:
+        """Prompt the model with context, stream deltas to UI, and return full text.
+        Fail-fast on unexpected errors; fall back to non-streaming when unsupported.
+        """
+        if not self.model:
+            raise RuntimeError(f"Could not initialize model for agent '{self.config.name}'")
+        try:
+            response = self.model.prompt(context, stream=True)
+            streamed_text_parts: list[str] = []
+            try:
+                from objects_registry import frontend_api
+                announced_action = False
+                for chunk in response:
+                    if not chunk:
+                        continue
+                    text_piece = getattr(chunk, 'text', None)
+                    text_piece = text_piece() if callable(text_piece) else (text_piece if isinstance(text_piece, str) else str(chunk))
+                    if not text_piece:
+                        continue
+                    
+                    streamed_text_parts.append(text_piece)
+                    if not announced_action:
+                        import re
+                        buf = "".join(streamed_text_parts)
+                        m = re.search(r"\"action\"\s*:\s*\"([A-Z_]+)\"", buf)
+                        if m:
+                            announced_action = True
+                            await frontend_api().send_to_agent(self.session_ref).stream_start(m.group(1))
+                    
+                    await frontend_api().send_to_agent(self.session_ref).stream(text_piece)
+                full_text = "".join(streamed_text_parts) if streamed_text_parts else ""
+                if not full_text:
+                    full_text = response.text()
+                return full_text
+            except TypeError:
+                # Stream not supported; fall back to full text
+                return response.text()
+        except Exception as e:
+            raise RuntimeError(f"Error getting response from LLM: {str(e)}")
+        
     
