@@ -6,7 +6,7 @@
 import { connectionManager } from './ConnectionManager';
 
 export interface FrontendAPIMessage {
-  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_call_announcement' | 'tool_call_announcement' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
+  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_call_announcement' | 'tool_call_announcement' | 'AGENT_CALL' | 'AGENT_DELEGATE' | 'TOOL_CALL' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
   message_id: string;
   timestamp: string;
   agent_id?: string;
@@ -221,17 +221,24 @@ export class FrontendAPIService {
         }
         break;
 
-      case 'agent_call_announcement':
-        console.log('📥 [Frontend] Processing agent_call_announcement for agent:', message.agent_id);
+      case 'AGENT_CALL':
+        console.log('📥 [Frontend] Processing AGENT_CALL for agent:', message.agent_id);
         if (this.handlers.onAgentCallAnnouncement && message.agent_id) {
-          this.handlers.onAgentCallAnnouncement(message.agent_id, sessionId, message.data);
+          this.handlers.onAgentCallAnnouncement(message.agent_id, sessionId, message);
         }
         break;
 
-      case 'tool_call_announcement':
-        console.log('📥 [Frontend] Processing tool_call_announcement for agent:', message.agent_id);
+      case 'AGENT_DELEGATE':
+        console.log('📥 [Frontend] Processing AGENT_DELEGATE for agent:', message.agent_id);
+        if (this.handlers.onAgentCallAnnouncement && message.agent_id) {
+          this.handlers.onAgentCallAnnouncement(message.agent_id, sessionId, message);
+        }
+        break;
+
+      case 'TOOL_CALL':
+        console.log('📥 [Frontend] Processing TOOL_CALL for agent:', message.agent_id);
         if (this.handlers.onToolCallAnnouncement && message.agent_id) {
-          this.handlers.onToolCallAnnouncement(message.agent_id, sessionId, message.data);
+          this.handlers.onToolCallAnnouncement(message.agent_id, sessionId, message);
         }
         break;
 
@@ -343,7 +350,9 @@ export class FrontendAPIService {
         break;
 
       default:
-        console.warn('Unknown FrontendAPI message type:', message.type);
+        const errorMessage = `Unknown FrontendAPI message type: ${message.type}`;
+        console.error(errorMessage);
+        throw new Error(errorMessage);
     }
   }
 

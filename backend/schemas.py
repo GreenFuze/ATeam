@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional, Any, Union, TYPE_CHECKING
 from enum import Enum
+from datetime import datetime
 import json
 
 if TYPE_CHECKING:
@@ -22,7 +23,30 @@ class MessageType(str, Enum):
     AGENT_DELEGATE = "AGENT_DELEGATE"
     REFINEMENT_RESPONSE = "REFINEMENT_RESPONSE"
     SYSTEM = "SYSTEM"
+    SEED_MESSAGE = "seed_message"
     ERROR = "ERROR"
+
+class FrontendMessageType(str, Enum):
+    """Message types for frontend API communication"""
+    AGENT_RESPONSE = "agent_response"
+    AGENT_STREAM = "agent_stream"
+    AGENT_STREAM_START = "agent_stream_start"
+    CONTEXT_UPDATE = "context_update"
+    CONVERSATION_SNAPSHOT = "conversation_snapshot"
+    CONVERSATION_LIST = "conversation_list"
+    SYSTEM_MESSAGE = "system_message"
+    SEED_MESSAGE = "seed_message"
+    SESSION_CREATED = "session_created"
+    NOTIFICATION = "notification"
+    AGENT_LIST_UPDATE = "agent_list_update"
+    TOOL_UPDATE = "tool_update"
+    PROMPT_UPDATE = "prompt_update"
+    PROVIDER_UPDATE = "provider_update"
+    MODEL_UPDATE = "model_update"
+    SCHEMA_UPDATE = "schema_update"
+    AGENT_DELEGATE = "AGENT_DELEGATE"
+    AGENT_CALL = "AGENT_CALL"
+    TOOL_CALL = "TOOL_CALL"
 
 class MessageIcon(str, Enum):
     CHAT = "chat"
@@ -291,6 +315,18 @@ class UILLMResponse(BaseModel):
     tool_name: Optional[str] = None
     tool_parameters: Optional[Dict[str, Any]] = None
     target_agent_id: Optional[str] = None
+    
+    # Tracking fields
+    already_sent: bool = False
+    
+    @property
+    def is_sent(self) -> bool:
+        """Check if this response has already been sent"""
+        return self.already_sent
+    
+    def mark_as_sent(self) -> None:
+        """Mark this response as already sent"""
+        self.already_sent = True
 
     def as_message_to_agent(self, agent_id: str) -> 'Message':
         """Convert this UILLMResponse to a Message for the specified agent"""
@@ -458,6 +494,39 @@ class UIRefinementResponse(UILLMResponse):
             action=refinement.action,
             reasoning=refinement.why
         )
+
+class StreamMessageData(BaseModel):
+    """Data structure for agent stream messages"""
+    delta: str
+    message_id: str = Field(default_factory=lambda: f"stream_{datetime.now().timestamp()}")
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+class StreamStartMessageData(BaseModel):
+    """Data structure for agent stream start messages"""
+    message_id: str = Field(default_factory=lambda: f"stream_{datetime.now().timestamp()}")
+    action: str
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+class ContextUpdateMessageData(BaseModel):
+    """Data structure for context update messages"""
+    tokens_used: Optional[int] = None
+    context_window: Optional[int] = None
+    percentage: float
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+class ConversationListMessageData(BaseModel):
+    """Data structure for conversation list messages"""
+    sessions: List[Dict[str, Any]]
+
+class FrontendAPIEnvelope(BaseModel):
+    """Generic WebSocket envelope for frontend API messages"""
+    type: str
+    message_id: str = Field(default_factory=lambda: f"msg_{datetime.now().timestamp()}")
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    agent_id: str
+    agent_name: str
+    session_id: str
+    data: Dict[str, Any]  # Generic data field for different message types
 
 class SessionRef(BaseModel):
     agent_id: str = Field(min_length=1)

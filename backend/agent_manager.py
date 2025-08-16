@@ -251,7 +251,7 @@ class AgentManager:
             agent_instance = self.agent_instances[agent_id][session_id]
             
             # Ensure the instance is connected
-            await agent_instance.ensure_connection()
+            await agent_instance.ensure_frontend_initialized()
             return agent_instance
         
         # No existing instances
@@ -259,7 +259,7 @@ class AgentManager:
             # Create a new instance
             agent_instance = self.create_agent(agent_id)
             # Ensure the instance is connected
-            await agent_instance.ensure_connection()
+            await agent_instance.ensure_frontend_initialized()
             return agent_instance
         
         return None
@@ -379,7 +379,7 @@ class AgentManager:
         # Switch mapping to the loaded session id
         # Rebind the agent instance to the loaded session id
         agent_instance.session_id = conv_data.session_id
-        # Mark as not yet announced so caller can ensure_connection
+                    # Mark as not yet announced so caller can ensure_frontend_initialized
         if hasattr(agent_instance, "_connection_established"):
             agent_instance._connection_established = False
         self.session_to_agent[conv_data.session_id] = agent_instance

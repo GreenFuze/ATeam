@@ -100,13 +100,20 @@ class Agent:
         
     # ---------- Public methods ----------
 
-    async def ensure_connection(self) -> "SessionRef":
+    async def ensure_frontend_initialized(self) -> "SessionRef":
         """Idempotently announce this agent's session and hydrate the UI. Returns SessionRef."""
         if self._connection_established:
             return self.session_ref
+        
+        # Only send these messages once during initial connection establishment
         from objects_registry import frontend_api
         await frontend_api().send_session_created(self.session_ref)
         await frontend_api().send_to_agent(self.session_ref).system_prompt(self.full_system_prompt)
+        
+        # Send seed messages if any exist (only once during connection establishment)
+        if self.seed_messages:
+            await self._send_seed_messages_to_frontend()
+        
         self._connection_established = True
         return self.session_ref
     
@@ -215,6 +222,37 @@ class Agent:
                 raise ValueError(f"Unknown seed message role: {seed_message.role}")
             
         return context_parts
+    
+    async def _send_seed_messages_to_frontend(self) -> None:
+        """Send seed messages to frontend (converts SeedMessage to Message objects)"""
+        from schemas import Message, MessageType
+        import uuid
+        from datetime import datetime
+        from objects_registry import frontend_api
+        
+        seed_messages = []
+        for seed_msg in self.seed_messages:
+            # Convert role to message_type
+            if seed_msg.role == "user":
+                message_type = MessageType.USER_MESSAGE
+            elif seed_msg.role == "assistant":
+                message_type = MessageType.CHAT_RESPONSE
+            elif seed_msg.role == "system":
+                message_type = MessageType.SYSTEM
+            else:
+                raise ValueError(f"Unknown seed message role: {seed_msg.role}")
+            
+            message = Message(
+                id=str(uuid.uuid4()),
+                agent_id=self.session_ref.agent_id,
+                content=seed_msg.content,
+                message_type=message_type,
+                timestamp=datetime.now().isoformat(),
+                metadata={}
+            )
+            seed_messages.append(message)
+        
+        await frontend_api().send_seed_messages(self.session_ref, seed_messages)
     
     
     def _fill_conversation_history(self, context_parts: List[str] = []) -> List[str]:
@@ -497,7 +535,7 @@ class Agent:
 
         # Emit TOOL_RETURN to frontend as a separate message (fail-fast)
         context_usage = self._calculate_context_usage()
-        await frontend_api().send_to_agent(self.session_ref).agent_response(
+        await frontend_api().send_to_agent(self.session_ref).send_agent_response_to_frontend(
             tool_ui_response,
             context_usage,
         )
@@ -511,7 +549,7 @@ class Agent:
         self.history.append_llm_response(llm_response)
         
         from objects_registry import frontend_api
-        await frontend_api().send_to_agent(self.session_ref).agent_response(
+        await frontend_api().send_to_agent(self.session_ref).send_agent_response_to_frontend(
             llm_response,
             self._calculate_context_usage()
         )

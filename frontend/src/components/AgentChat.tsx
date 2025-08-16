@@ -174,7 +174,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             initialAutoScrollPendingRef.current = false;
           }
         },
-        onAgentCallAnnouncement: (_agentId: string, _sessionId: string, data: any) => {
+        onAgentCallAnnouncement: (_agentId: string, _sessionId: string, message: any) => {
           // Only show announcements for the current agent
           if (_agentId !== agentId) {
             return;
@@ -184,15 +184,15 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
           const waitingMessage: Message = {
             id: `waiting-${Date.now()}`,
             agent_id: agentId,
-            content: data.reason || "Agent is waiting for another agent to complete a task...",
+            content: message.reasoning || "Agent is waiting for another agent to complete a task...",
             message_type: MessageType.SYSTEM,
-            timestamp: data.timestamp || new Date().toISOString(),
+            timestamp: message.timestamp || new Date().toISOString(),
             metadata: { 
-              ...(data.metadata || {}), 
+              ...(message.metadata || {}), 
               isWaiting: true,
-              callingAgent: data.calling_agent,
-              calleeAgent: data.callee_agent,
-              expectsReturn: data.expects_return
+              callingAgent: message.metadata?.calling_agent,
+              calleeAgent: message.metadata?.callee_agent,
+              expectsReturn: message.metadata?.expects_return
             },
           };
           
@@ -204,7 +204,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             scrollToBottom();
           }
         },
-        onToolCallAnnouncement: (_agentId: string, _sessionId: string, data: any) => {
+        onToolCallAnnouncement: (_agentId: string, _sessionId: string, message: any) => {
           // Only show announcements for the current agent
           if (_agentId !== agentId) {
             return;
@@ -214,15 +214,15 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
           const waitingMessage: Message = {
             id: `tool-waiting-${Date.now()}`,
             agent_id: agentId,
-            content: data.reason || "Agent is waiting for a tool to complete...",
+            content: message.reasoning || "Agent is waiting for a tool to complete...",
             message_type: MessageType.SYSTEM,
-            timestamp: data.timestamp || new Date().toISOString(),
+            timestamp: message.timestamp || new Date().toISOString(),
             metadata: { 
-              ...(data.metadata || {}), 
+              ...(message.metadata || {}), 
               isWaiting: true,
               isToolWaiting: true,
-              toolName: data.tool_name,
-              agent: data.agent
+              toolName: message.tool_name,
+              agent: message.metadata?.agent
             },
           };
           

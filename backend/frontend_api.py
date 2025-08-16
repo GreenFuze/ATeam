@@ -7,9 +7,9 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from fastapi import WebSocket, WebSocketDisconnect
-from schemas import Message, UILLMResponse, ContextUsageData, MessageType, MessageIcon, SessionRef
+from schemas import Message, UILLMResponse, FrontendAPIEnvelope, StreamMessageData, StreamStartMessageData, ContextUpdateMessageData, ConversationListMessageData, UIAgentDelegateResponse, UIAgentCallResponse, UIToolCallResponse, ContextUsageData, MessageType, FrontendMessageType, MessageIcon, SessionRef
 
 # Lazy agent name resolver to avoid circular imports at module import time
 def _safe_agent_name(agent_id: str) -> str:
@@ -115,244 +115,151 @@ class FrontendAPI:
     # ---------- Outbound typed envelopes ----------
     class _BaseOutbound(BaseModel):
         type: str
-        message_id: str
-        timestamp: str
+        message_id: str = Field(default_factory=lambda: f"msg_{datetime.now().timestamp()}")
+        timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
         agent_id: str
         agent_name: str
         session_id: str
-
-    class _SystemPromptData(BaseModel):
-        content: str
-        agent_name: str
-        timestamp: str
 
     class _SeedPromptItem(BaseModel):
         role: str
         content: str
 
-    class _SeedPromptsData(BaseModel):
-        prompts: List['FrontendAPI._SeedPromptItem']
-        agent_name: str
-        timestamp: str
-
-    class _DelegationAnnouncementData(BaseModel):
-        delegating_agent: str
-        delegated_agent: str
-        reason: str
-        timestamp: str
-
-    class _AgentCallAnnouncementData(BaseModel):
-        calling_agent: str
-        callee_agent: str
-        reason: str
-        expects_return: bool
-        timestamp: str
-
-    class _ToolCallAnnouncementData(BaseModel):
-        agent: str
-        tool_name: str
-        reason: str
-        timestamp: str
-
     class _SystemPromptMessage(_BaseOutbound):
-        data: 'FrontendAPI._SystemPromptData'
+        content: str
 
     class _SeedPromptsMessage(_BaseOutbound):
-        data: 'FrontendAPI._SeedPromptsData'
+        prompts: List['FrontendAPI._SeedPromptItem']
 
-    class _DelegationAnnouncementMessage(_BaseOutbound):
-        data: 'FrontendAPI._DelegationAnnouncementData'
 
-    class _AgentCallAnnouncementMessage(_BaseOutbound):
-        data: 'FrontendAPI._AgentCallAnnouncementData'
-
-    class _ToolCallAnnouncementMessage(_BaseOutbound):
-        data: 'FrontendAPI._ToolCallAnnouncementData'
 
     # ---------- Facades ----------
     class _SingleAgentSender:
         def __init__(self, api: 'FrontendAPI', ref: 'SessionRef'):
             self._api = api
-            self._ref = ref
+            self._session = ref
 
         async def system_prompt(self, content: str) -> None:
-            now = datetime.now().isoformat()
             msg = FrontendAPI._SystemPromptMessage(
-                type="system_prompt",
-                message_id=f"msg_{datetime.now().timestamp()}",
-                timestamp=now,
-                agent_id=self._ref.agent_id,
-                agent_name=self._ref.agent_name,
-                session_id=self._ref.session_id,
-                data=FrontendAPI._SystemPromptData(
-                    content=content,
-                    agent_name=self._ref.agent_name,
-                    timestamp=now,
-                ),
+                type=MessageType.SYSTEM,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                content=content,
             )
-            await self._api._send_to_agent_message(self._ref, msg.model_dump())
+            await self._api._send_to_agent_message(self._session, msg.model_dump())
 
         async def seed_prompts(self, prompts: List[Dict[str, str]]) -> None:
-            now = datetime.now().isoformat()
             items = [FrontendAPI._SeedPromptItem(**p) for p in prompts]
             msg = FrontendAPI._SeedPromptsMessage(
-                type="seed_prompts",
-                message_id=f"msg_{datetime.now().timestamp()}",
-                timestamp=now,
-                agent_id=self._ref.agent_id,
-                agent_name=self._ref.agent_name,
-                session_id=self._ref.session_id,
-                data=FrontendAPI._SeedPromptsData(
-                    prompts=items,
-                    agent_name=self._ref.agent_name,
-                    timestamp=now,
-                ),
+                type=MessageType.SEED_MESSAGE,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                prompts=items,
             )
-            await self._api._send_to_agent_message(self._ref, msg.model_dump())
+            await self._api._send_to_agent_message(self._session, msg.model_dump())
 
-        async def agent_response(self, response: UILLMResponse, context_usage: ContextUsageData) -> None:
-            if response.metadata and response.metadata.get("already_sent"):
+        async def send_agent_response_to_frontend(self, response: UILLMResponse, context_usage: ContextUsageData) -> None:
+            if response.is_sent:
                 return
+            
             assert response.message_type is not None, "response.message_type is required"
-            msg_type_value = response.message_type.value
-            if getattr(response, 'icon', None) == MessageIcon.ERROR:
-                msg_type_value = MessageType.ERROR.value
 
             # Send context update first
             await self._context_update(context_usage)
 
-            data: Dict[str, Any] = {
-                "content": response.content,
-                "action": response.action,
-                "reasoning": response.reasoning,
-                "metadata": response.metadata,
-                "message_type": msg_type_value,
-                "timestamp": datetime.now().isoformat(),
-                "agent_name": self._ref.agent_name,
-            }
-            if response.tool_name:
-                data["tool_name"] = response.tool_name
-            if response.tool_parameters:
-                data["tool_parameters"] = response.tool_parameters
-            if response.target_agent_id:
-                data["target_agent_id"] = response.target_agent_id
-
-            message = {
-                "type": "agent_response",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": self._ref.agent_id,
-                "agent_name": self._ref.agent_name,
-                "session_id": self._ref.session_id,
-                "data": data,
-            }
-            logger.info(f"📤 Agent -> {self._ref.agent_id}: {json.dumps(message)}")
-            await self._api._send_to_agent_message(self._ref, message)
+            # Create envelope with UILLMResponse data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.AGENT_RESPONSE,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                data=response.model_dump()
+            )
+            
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
             
             # Mark as already sent after successful send
-            if response.metadata is None:
-                response.metadata = {}
-            response.metadata["already_sent"] = True
+            response.mark_as_sent()
 
         async def stream(self, content_delta: str) -> None:
-            message = {
-                "type": "agent_stream",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": self._ref.agent_id,
-                "agent_name": self._ref.agent_name,
-                "session_id": self._ref.session_id,
-                "data": {
-                    "delta": content_delta,
-                    "message_id": f"stream_{self._ref.agent_id}",
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
-            await self._api._send_to_agent_message(self._ref, message)
+            # Create stream message data
+            stream_data = StreamMessageData(delta=content_delta)
+            
+            # Create envelope with stream data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.AGENT_STREAM,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                data=stream_data.model_dump()
+            )
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def stream_start(self, action: str) -> None:
-            message = {
-                "type": "agent_stream_start",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": self._ref.agent_id,
-                "agent_name": self._ref.agent_name,
-                "session_id": self._ref.session_id,
-                "data": {
-                    "message_id": f"stream_{self._ref.agent_id}",
-                    "action": action,
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
-            await self._api._send_to_agent_message(self._ref, message)
+            # Create stream start message data
+            stream_start_data = StreamStartMessageData(action=action)
+            
+            # Create envelope with stream start data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.AGENT_STREAM_START,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                data=stream_start_data.model_dump()
+            )
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def _context_update(self, context_data: ContextUsageData) -> None:
-            message = {
-                "type": "context_update",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": self._ref.agent_id,
-                "agent_name": self._ref.agent_name,
-                "session_id": self._ref.session_id,
-                "data": {
-                    "tokens_used": context_data.tokens_used,
-                    "context_window": context_data.context_window,
-                    "percentage": context_data.percentage,
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
-            await self._api._send_to_agent_message(self._ref, message)
+            # Create context update message data
+            context_update_data = ContextUpdateMessageData(
+                tokens_used=context_data.tokens_used,
+                context_window=context_data.context_window,
+                percentage=context_data.percentage
+            )
+            
+            # Create envelope with context update data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.CONTEXT_UPDATE,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                data=context_update_data.model_dump()
+            )
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def conversation_snapshot(self, snapshot: Dict[str, Any]) -> None:
-            message = {
-                "type": "conversation_snapshot",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": self._ref.agent_id,
-                "agent_name": self._ref.agent_name,
-                "session_id": self._ref.session_id,
-                "data": snapshot,
-            }
-            await self._api._send_to_agent_message(self._ref, message)
+            # Create envelope with conversation snapshot data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.CONVERSATION_SNAPSHOT,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                data=snapshot
+            )
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def conversation_list(self, sessions: List[Dict[str, Any]]) -> None:
-            message = {
-                "type": "conversation_list",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": self._ref.agent_id,
-                "agent_name": self._ref.agent_name,
-                "session_id": self._ref.session_id,
-                "data": {"sessions": sessions},
-            }
-            await self._api._send_to_agent_message(self._ref, message)
+            # Create conversation list message data
+            conversation_list_data = ConversationListMessageData(sessions=sessions)
+            
+            # Create envelope with conversation list data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.CONVERSATION_LIST,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                data=conversation_list_data.model_dump()
+            )
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def tool_call_announcement(self, tool_response: UILLMResponse, context_usage: ContextUsageData) -> None:
-            now = datetime.now().isoformat()
-            
-            # Extract tool information from the tool response
-            tool_name = tool_response.tool_name or "unknown_tool"
-            waiting_message = f"Agent is waiting for tool {tool_name} to complete"
-            
-            # Send the tool call announcement
-            announcement_msg = FrontendAPI._ToolCallAnnouncementMessage(
-                type="tool_call_announcement",
-                message_id=f"msg_{datetime.now().timestamp()}",
-                timestamp=now,
-                agent_id=self._ref.agent_id,
-                agent_name=self._ref.agent_name,
-                session_id=self._ref.session_id,
-                data=FrontendAPI._ToolCallAnnouncementData(
-                    agent=self._ref.agent_name,
-                    tool_name=tool_name,
-                    reason=waiting_message,
-                    timestamp=now,
-                ),
-            )
-            await self._api._send_to_agent_message(self._ref, announcement_msg.model_dump())
+            # Send the tool call announcement directly as UILLMResponse
+            await self._api._send_to_agent_message(self._session, tool_response.model_dump())
             
             # Send the tool call details immediately after
-            await self.agent_response(tool_response, context_usage)
+            await self.send_agent_response_to_frontend(tool_response, context_usage)
 
     class _DualAgentSender:
         def __init__(self, api: 'FrontendAPI', a_ref: 'SessionRef', b_ref: 'SessionRef'):
@@ -361,41 +268,51 @@ class FrontendAPI:
             self._b = b_ref
 
         async def delegation_announcement(self, reason: str) -> None:
-            now = datetime.now().isoformat()
-            msg = FrontendAPI._DelegationAnnouncementMessage(
-                type="delegation_announcement",
-                message_id=f"msg_{datetime.now().timestamp()}",
-                timestamp=now,
-                agent_id=self._b.agent_id,
-                agent_name=self._b.agent_name,
-                session_id=self._b.session_id,
-                data=FrontendAPI._DelegationAnnouncementData(
-                    delegating_agent=self._a.agent_name,
-                    delegated_agent=self._b.agent_name,
-                    reason=reason or "No reason provided.",
-                    timestamp=now,
-                ),
+            # Send UILLMResponse via envelope for delegation announcement
+            delegation_response = UILLMResponse(
+                content=f"Agent {self._a.agent_name} delegated to {self._b.agent_name}",
+                message_type=MessageType.AGENT_DELEGATE,
+                action=MessageType.AGENT_DELEGATE,
+                reasoning=reason or "No reason provided.",
+                target_agent_id=self._b.agent_id,
+                metadata={
+                    "delegating_agent": self._a.agent_name,
+                    "delegated_agent": self._b.agent_name
+                }
             )
-            await self._api._send_to_agent_message(self._b, msg.model_dump())
+            
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.AGENT_DELEGATE,
+                agent_id=self._a.agent_id,
+                agent_name=self._a.agent_name,
+                session_id=self._a.session_id,
+                data=delegation_response.model_dump()
+            )
+            await self._api._send_to_agent_message(self._b, envelope.model_dump())
 
         async def agent_call_announcement(self, reason: str) -> None:
-            now = datetime.now().isoformat()
-            msg = FrontendAPI._AgentCallAnnouncementMessage(
-                type="agent_call_announcement",
-                message_id=f"msg_{datetime.now().timestamp()}",
-                timestamp=now,
-                agent_id=self._b.agent_id,
-                agent_name=self._b.agent_name,
-                session_id=self._b.session_id,
-                data=FrontendAPI._AgentCallAnnouncementData(
-                    calling_agent=self._a.agent_name,
-                    callee_agent=self._b.agent_name,
-                    reason=reason or "No reason provided.",
-                    expects_return=True,
-                    timestamp=now,
-                ),
+            # Send UILLMResponse via envelope for agent call announcement
+            call_response = UILLMResponse(
+                content=f"Agent {self._a.agent_name} is calling {self._b.agent_name}",
+                message_type=MessageType.AGENT_CALL,
+                action=MessageType.AGENT_CALL,
+                reasoning=reason or "No reason provided.",
+                target_agent_id=self._b.agent_id,
+                metadata={
+                    "calling_agent": self._a.agent_name,
+                    "callee_agent": self._b.agent_name,
+                    "expects_return": True
+                }
             )
-            await self._api._send_to_agent_message(self._b, msg.model_dump())
+            
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.AGENT_CALL,
+                agent_id=self._a.agent_id,
+                agent_name=self._a.agent_name,
+                session_id=self._a.session_id,
+                data=call_response.model_dump()
+            )
+            await self._api._send_to_agent_message(self._b, envelope.model_dump())
 
     # Factories
     def send_to_agent(self, ref: 'SessionRef') -> '_SingleAgentSender':
@@ -403,157 +320,152 @@ class FrontendAPI:
 
     def send_to_agents(self, a_ref: 'SessionRef', b_ref: 'SessionRef') -> '_DualAgentSender':
         return FrontendAPI._DualAgentSender(self, a_ref, b_ref)
-
-    # Removed legacy send_conversation_snapshot: use send_to_agent(ref).conversation_snapshot(...)
-
-    # Removed legacy send_conversation_list: use send_to_agent(ref).conversation_list(...)
     
-    # Removed legacy send_system_message: use send_to_agent(ref).system_prompt(...)
-    
-    # Removed legacy send_agent_response: use send_to_agent(ref).agent_response(...)
-
-    # Removed legacy send_agent_stream: use send_to_agent(ref).stream(...)
-
-    # Removed legacy send_agent_stream_start: use send_to_agent(ref).stream_start(...)
-    
-    async def send_seed_messages(self, agent_id: str, session_id: str, messages: List[Message]):
+    async def send_seed_messages(self, ref: SessionRef, messages: List[Message]):
         """Send seed messages to frontend"""
-        agent_name = _safe_agent_name(agent_id)
         for message in messages:
-            message_data = {
-                "type": "seed_message",
-                "message_id": f"msg_{datetime.now().timestamp()}",
-                "timestamp": datetime.now().isoformat(),
-                "agent_id": agent_id,
-                "agent_name": agent_name,
-                "session_id": session_id,
-                "data": {
+            # Create envelope with seed message data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.SEED_MESSAGE,
+                agent_id=ref.agent_id,
+                agent_name=ref.agent_name,
+                session_id=ref.session_id,
+                data={
                     "content": message.content,
-                    "message_type": message.message_type.value,
+                    "message_type": message.message_type,
                     "timestamp": message.timestamp,
                     "metadata": message.metadata or {}
                 }
-            }
+            )
             # Broadcast seed messages for initial UI hydration
             for connection_id in list(self.active_connections.keys()):
-                await self.send_to_connection(connection_id, message_data)
+                await self.send_to_connection(connection_id, envelope.model_dump())
     
-    # Removed legacy send_error (unused)
-    
-    # Removed legacy send_context_update: use send_to_agent(ref).context_update(...)
     
     async def send_notification(self, notification_type: str, message: str):
         """Send global notification to all connected frontends"""
-        notification_data = {
-            "type": "notification",
-            "message_id": f"msg_{datetime.now().timestamp()}",
-            "timestamp": datetime.now().isoformat(),
-            "data": {
+        # Create envelope with notification data
+        envelope = FrontendAPIEnvelope(
+            type=FrontendMessageType.NOTIFICATION,
+            agent_id="",  # Global notification
+            agent_name="",  # Global notification
+            session_id="",  # Global notification
+            data={
                 "type": notification_type,
                 "message": message
             }
-        }
+        )
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
         for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, notification_data)
+            await self.send_to_connection(connection_id, envelope.model_dump())
 
     async def send_agent_list_update(self, data: Dict[str, Any]):
         """Send agent list update to all frontend connections"""
-        message = {
-            "type": "agent_list_update",
-            "message_id": f"msg_{datetime.now().timestamp()}",
-            "timestamp": datetime.now().isoformat(),
-            "data": data
-        }
+        # Create envelope with agent list update data
+        envelope = FrontendAPIEnvelope(
+            type=FrontendMessageType.AGENT_LIST_UPDATE,
+            agent_id="",  # Global update
+            agent_name="",  # Global update
+            session_id="",  # Global update
+            data=data
+        )
         
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
         for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, message)
+            await self.send_to_connection(connection_id, envelope.model_dump())
         
 
     async def send_tool_update(self, data: Dict[str, Any]):
         """Send tool update to all frontend connections"""
-        message = {
-            "type": "tool_update",
-            "message_id": f"msg_{datetime.now().timestamp()}",
-            "timestamp": datetime.now().isoformat(),
-            "data": data
-        }
+        # Create envelope with tool update data
+        envelope = FrontendAPIEnvelope(
+            type=FrontendMessageType.TOOL_UPDATE,
+            agent_id="",  # Global update
+            agent_name="",  # Global update
+            session_id="",  # Global update
+            data=data
+        )
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
         for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, message)
+            await self.send_to_connection(connection_id, envelope.model_dump())
 
     async def send_prompt_update(self, data: Dict[str, Any]):
         """Send prompt update to all frontend connections"""
-        message = {
-            "type": "prompt_update",
-            "message_id": f"msg_{datetime.now().timestamp()}",
-            "timestamp": datetime.now().isoformat(),
-            "data": data
-        }
+        # Create envelope with prompt update data
+        envelope = FrontendAPIEnvelope(
+            type=FrontendMessageType.PROMPT_UPDATE,
+            agent_id="",  # Global update
+            agent_name="",  # Global update
+            session_id="",  # Global update
+            data=data
+        )
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
         for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, message)
+            await self.send_to_connection(connection_id, envelope.model_dump())
 
     async def send_provider_update(self, data: Dict[str, Any]):
         """Send provider update to all frontend connections"""
-        message = {
-            "type": "provider_update",
-            "message_id": f"msg_{datetime.now().timestamp()}",
-            "timestamp": datetime.now().isoformat(),
-            "data": data
-        }
+        # Create envelope with provider update data
+        envelope = FrontendAPIEnvelope(
+            type=FrontendMessageType.PROVIDER_UPDATE,
+            agent_id="",  # Global update
+            agent_name="",  # Global update
+            session_id="",  # Global update
+            data=data
+        )
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
         for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, message)
+            await self.send_to_connection(connection_id, envelope.model_dump())
 
     async def send_model_update(self, data: Dict[str, Any]):
         """Send model update to all frontend connections"""
-        message = {
-            "type": "model_update",
-            "message_id": f"msg_{datetime.now().timestamp()}",
-            "timestamp": datetime.now().isoformat(),
-            "data": data
-        }
+        # Create envelope with model update data
+        envelope = FrontendAPIEnvelope(
+            type=FrontendMessageType.MODEL_UPDATE,
+            agent_id="",  # Global update
+            agent_name="",  # Global update
+            session_id="",  # Global update
+            data=data
+        )
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
         for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, message)
+            await self.send_to_connection(connection_id, envelope.model_dump())
 
     async def send_schema_update(self, data: Dict[str, Any]):
         """Send schema update to all frontend connections"""
-        message = {
-            "type": "schema_update",
-            "message_id": f"msg_{datetime.now().timestamp()}",
-            "timestamp": datetime.now().isoformat(),
-            "data": data
-        }
+        # Create envelope with schema update data
+        envelope = FrontendAPIEnvelope(
+            type=FrontendMessageType.SCHEMA_UPDATE,
+            agent_id="",  # Global update
+            agent_name="",  # Global update
+            session_id="",  # Global update
+            data=data
+        )
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
         for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, message)
+            await self.send_to_connection(connection_id, envelope.model_dump())
 
     async def send_session_created(self, ref: SessionRef):
         """Send session created message to frontend"""
-        agent_id = ref.agent_id
-        agent_name = ref.agent_name
-        message = {
-            "type": "session_created",
-            "message_id": f"msg_{datetime.now().timestamp()}",
-            "timestamp": datetime.now().isoformat(),
-            "agent_id": agent_id,
-            "agent_name": agent_name,
-            "data": {
+        # Create envelope with session created data
+        envelope = FrontendAPIEnvelope(
+            type=FrontendMessageType.SESSION_CREATED,
+            agent_id=ref.agent_id,
+            agent_name=ref.agent_name,
+            session_id=ref.session_id,
+            data={
                 "session_id": ref.session_id,
-                "agent_name": agent_name,
+                "agent_name": ref.agent_name,
                 "timestamp": datetime.now().isoformat()
             }
-        }
+        )
         # Broadcast session_created so frontend can learn the session_id and then subscribe
         for cid in list(self.active_connections.keys()):
-            await self.send_to_connection(cid, message)
+            await self.send_to_connection(cid, envelope.model_dump())
