@@ -6,7 +6,7 @@
 import { connectionManager } from './ConnectionManager';
 
 export interface FrontendAPIMessage {
-  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_call_announcement' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
+  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_call_announcement' | 'tool_call_announcement' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
   message_id: string;
   timestamp: string;
   agent_id?: string;
@@ -29,6 +29,7 @@ export interface FrontendAPIHandlers {
   onContextUpdate?: (agentId: string, sessionId: string, data: any) => void;
   onNotification?: (type: string, message: string) => void;
   onAgentCallAnnouncement?: (agentId: string, sessionId: string, data: any) => void;
+  onToolCallAnnouncement?: (agentId: string, sessionId: string, data: any) => void;
   onAgentListUpdate?: (data: any) => void;
   onAgentListUpdateSidebar?: (data: any) => void;
   onAgentListUpdateAgentsPage?: (data: any) => void;
@@ -224,6 +225,13 @@ export class FrontendAPIService {
         console.log('📥 [Frontend] Processing agent_call_announcement for agent:', message.agent_id);
         if (this.handlers.onAgentCallAnnouncement && message.agent_id) {
           this.handlers.onAgentCallAnnouncement(message.agent_id, sessionId, message.data);
+        }
+        break;
+
+      case 'tool_call_announcement':
+        console.log('📥 [Frontend] Processing tool_call_announcement for agent:', message.agent_id);
+        if (this.handlers.onToolCallAnnouncement && message.agent_id) {
+          this.handlers.onToolCallAnnouncement(message.agent_id, sessionId, message.data);
         }
         break;
 

@@ -10,7 +10,7 @@ import uuid
 import threading
 import asyncio
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Callable
 from pathlib import Path
 
 import llm
@@ -22,9 +22,10 @@ from schemas import (
     ConversationData, SeedMessage,
     StructuredResponseType, ChatResponse, ToolCallResponse, ToolReturnResponse,
     AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, RefinementResponse,
-    UnknownActionError, SessionRef, MessageHistory, PromptType,
+    UnknownActionError, SessionRef, MessageHistory, PromptType, OperationType,
 )
 from notification_utils import log_error, log_warning, log_info
+from tool_executor import ToolRunner
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,9 @@ class Agent:
         self._task_queue = None  # Will be initialized when first task is scheduled
         self._worker_task = None  # Worker coroutine for processing tasks
         self._llm_lock = asyncio.Lock()  # Lock for send_to_llm to prevent race conditions
+        
+        # Initialize tool runner
+        self._tool_runner = ToolRunner(self)
         
         # Load prompts and initialize conversation
         self._load_prompts()
@@ -107,8 +111,8 @@ class Agent:
         return self.session_ref
     
     
-    async def send_to_llm(self, message: str) -> UILLMResponse:
-        """Send a message to the LLM and get a response.
+    async def send_to_llm(self, message: str) -> None:
+        """Send a message to the LLM and handle the response.
         
         This method handles the complete flow:
         1. Appends user message to history
@@ -117,6 +121,9 @@ class Agent:
         4. Handles structured response parsing
         5. Appends response to history
         6. Sends response to frontend
+        
+        Note: This method does not return anything - all communication is done via UI messages.
+        For agent orchestration, the called agent should emit AGENT_RETURN when truly complete.
         """
         async with self._llm_lock:  # Prevent race conditions
             if not self.model:
@@ -142,25 +149,16 @@ class Agent:
 
                 # Build explicit illegal-action error message
                 from schemas import ErrorChatResponse
-                structured_response = ErrorChatResponse(e)
+                structured_response = ErrorChatResponse(e, self)
             except ValueError as e:
                 logger.error(f"❌ DEBUG: Failed to parse LLM response. Error: {e}\nResponse text was:\n{response_text}")
 
                 # If parsing fails, respond with an ERROR-flavored ChatResponse
                 from schemas import ErrorChatResponse
-                structured_response = ErrorChatResponse(e)
+                structured_response = ErrorChatResponse(e, self)
             
-            # Handle the LLM response (UI)
-            llm_response = await self._handle_structured_response(structured_response)
-            self.history.append_llm_response(llm_response)
-            
-            # Calculate context usage and send response via FrontendAPI (fail-fast)
-            context_usage = self._calculate_context_usage()
-            
-            from objects_registry import frontend_api
-            await frontend_api().send_to_agent(self.session_ref).agent_response(llm_response, context_usage)
-            
-            return llm_response
+            # Handle the LLM response - each handler manages its own UI communication and history
+            await self._handle_structured_response(structured_response)
     
     
     def get_conversation_history(self) -> List[Message]:
@@ -358,7 +356,10 @@ class Agent:
         elif action_enum == MessageType.TOOL_RETURN:
             if 'success' not in response_data:
                 raise ValidationError('required "success" field is missing')
-            response_data['success'] = self._convert_to_bool_string(response_data['success'])
+            # Convert string success to boolean for ToolReturnResponse constructor
+            success_str = response_data['success']
+            success_bool = success_str.lower() == "true" if isinstance(success_str, str) else bool(success_str)
+            response_data['success'] = success_bool
             return ToolReturnResponse(**response_data)
         
         elif action_enum == MessageType.AGENT_DELEGATE:
@@ -378,102 +379,17 @@ class Agent:
             raise RuntimeError(f'Unknown action field - although it was checked earlier.\nThere is an internal error.\nResponse: {response_data}')
                 
 
-    def _delegate_to_agent(self, target_instance: 'Agent', forwarded_input: str, reason_text: str) -> None:
-        """Delegate work to another agent without expecting a return.
 
-        - Ensures target connection and announces delegation
-        - Schedules the target agent processing, but does not await
-        - Does NOT emit AGENT_RETURN back to this agent
-        """
-        async def _do_delegate() -> None:
-            
-            await target_instance.ensure_connection()
 
-            from objects_registry import frontend_api
-            await frontend_api().send_to_agents(self.session_ref, target_instance.session_ref).delegation_announcement(reason_text)
-
-            target_instance._schedule(target_instance.send_to_llm(forwarded_input))
-
-        self._schedule(_do_delegate())
-        
-
-    async def _do_agent_call_and_agent_return(self, target_instance: 'Agent', forwarded_input: str, reason_text: str) -> None:
-        """Call another agent and emit AGENT_RETURN back to the caller when done.
-
-        - Ensures target connection and announces call intent
-        - Awaits target response
-        - Emits AGENT_RETURN into this agent's session and appends to history
-        """
-        from objects_registry import frontend_api
-
-        await target_instance.ensure_connection()
-
-        await frontend_api().send_to_agents(self.session_ref, target_instance.session_ref).agent_call_announcement(reason_text)
-
-        # Schedule the target agent's work and wait for result using a future
-        future = asyncio.Future()
-        target_instance._schedule(target_instance._send_to_llm_with_future(forwarded_input, future))
-        
-        try:
-            target_response = await future
-            target_id = target_instance.id
-
-            return_msg = AgentReturnResponse(
-                return_to_agent=self,
-                returning_agent=target_instance,
-                is_success=True,
-                reasoning=target_response.reasoning
-            ).to_ui()
-
-            self.history.append_llm_response(return_msg)
-
-            logger.info(f"🔁 AUTO-RET {target_id} -> {self.id}")
-
-            context_usage = self._calculate_context_usage()
-            await frontend_api().send_to_agent(self.session_ref).agent_response(return_msg, context_usage)
-            
-        except Exception as e:
-            # Handle target agent failure
-            logger.error(f"Target agent {target_instance.id} failed: {e}")
-            
-            # Create error response
-            error_msg = AgentReturnResponse(
-                return_to_agent=self,
-                returning_agent=target_instance,
-                is_success=False,
-                reasoning=f"Target agent failed: {str(e)}"
-            ).to_ui()
-            
-            # Add to history and send to frontend
-            self.history.append_llm_response(error_msg)
-            
-            logger.info(f"🔁 AUTO-RET ERROR {target_instance.id} -> {self.id}")
-            
-            context_usage = self._calculate_context_usage()
-            await frontend_api().send_to_agent(self.session_ref).agent_response(error_msg, context_usage)
-
-    # Common failure emitter
-    def _send_failure_return(self, caller_session_id: str, reason: str, error_code: str) -> UILLMResponse:
-        from objects_registry import frontend_api
-        failure_response = AgentReturnResponse(
-            reasoning=reason,
-            agent=self.id,
-            returning_agent=self.id,
-            success="False"
-        ).to_ui(self.config.model, self.id)
-        # Schedule send in background and return synchronously
-        context_usage = self._calculate_context_usage()
-        self._schedule(frontend_api().send_to_agent(self.session_ref).agent_response(failure_response, context_usage))
-        return failure_response
 
     # Agent-level task queue and worker
     async def _start_worker(self):
         """Start the agent's task worker if not already running"""
         if self._worker_task is None:
-            import asyncio
             self._task_queue = asyncio.Queue()
             self._worker_task = asyncio.create_task(self._process_tasks())
             logger.debug(f"Started worker for agent {self.id}")
+    
     
     async def _process_tasks(self):
         """Process tasks in order for this agent"""
@@ -490,10 +406,10 @@ class Agent:
                 import traceback
                 logger.error(f"Traceback: {traceback.format_exc()}")
     
+    
     # Background scheduler
     def _schedule(self, coro):
         """Schedule a task for this agent's queue"""
-        import asyncio
         # Initialize worker if needed
         if self._worker_task is None:
             asyncio.create_task(self._start_worker())
@@ -502,26 +418,25 @@ class Agent:
             raise RuntimeError(f"Agent {self.id} task queue not initialized - this indicates a bug in agent initialization")
         self._task_queue.put_nowait(coro)
     
-    async def _handle_structured_response(self, structured_response: StructuredResponseType) -> UILLMResponse:
-        """Handle different response actions"""
+    async def _handle_structured_response(self, structured_response: StructuredResponseType) -> None:
+        """Handle different response actions - each handler manages its own UI communication and history"""
         if isinstance(structured_response, ChatResponse):
-            return self._handle_chat_response(structured_response)
+            await self._handle_chat_response(structured_response)
         elif isinstance(structured_response, ToolCallResponse):
-            return await self._handle_tool_call(structured_response)
-        elif isinstance(structured_response, ToolReturnResponse):
-            return self._handle_tool_return(structured_response)
+            await self._handle_tool_call(structured_response)
+
         elif isinstance(structured_response, AgentDelegateResponse):
-            return self._handle_agent_delegate(structured_response)
+            await self._handle_agent_delegate(structured_response)
         elif isinstance(structured_response, AgentCallResponse):
-            return self._handle_agent_call(structured_response)
+            await self._handle_agent_call(structured_response)
         elif isinstance(structured_response, AgentReturnResponse):
-            return self._handle_agent_return(structured_response)
+            await self._handle_agent_return(structured_response)
         elif isinstance(structured_response, RefinementResponse):
-            return self._handle_refinement_response(structured_response)
+            await self._handle_refinement_response(structured_response)
         else:
             raise ValueError(f"Unknown response type: {type(structured_response)}")
     
-    def _handle_chat_response(self, response: ChatResponse) -> UILLMResponse:
+    async def _handle_chat_response(self, response: ChatResponse) -> None:
         """Handle chat response - supports WAIT_USER_INPUT and CONTINUE_WORK variants"""
         # Map extended chat actions to message types; default to CHAT_RESPONSE
         message_type = MessageType.CHAT_RESPONSE
@@ -530,186 +445,194 @@ class Agent:
         elif response.action == MessageType.CHAT_RESPONSE_CONTINUE_WORK.value:
             message_type = MessageType.CHAT_RESPONSE
 
-        return response.to_ui()
+        # Handle UI communication and history management
+        await self._send_llm_response_to_ui(response.to_ui())
     
-    async def _send_to_llm_with_future(self, message: str, future: asyncio.Future):
-        """Send message to LLM and set the result in the future"""
-        try:
-            result = await self.send_to_llm(message)
-            future.set_result(result)
-        except Exception as e:
-            future.set_exception(e)
-    
-    async def _continue_after_tool(self, tool_name: str, tool_result: str):
-        """Continue conversation after tool execution (scheduled task)"""
-        try:
-            inner_response = await self.send_to_llm(f"Tool {tool_name} returned: {tool_result}")
-            # Inner call already marked as sent by agent_response
-            logger.info(f"🔄 Tool continuation completed for {tool_name}")
-        except Exception as e:
-            logger.error(f"Error in tool continuation for {tool_name}: {e}")
-    
-    async def _handle_tool_call(self, response: ToolCallResponse) -> UILLMResponse:
+
+    async def _handle_tool_call(self, response: ToolCallResponse) -> None:
         """Handle tool call - execute tool and continue conversation"""
-        # Lazy import to avoid circular dependency
-        from tool_executor import run_tool
-        from objects_registry import frontend_api
+        from objects_registry import frontend_api, tool_manager
+        from llm_auto_reply_prompts import LLMAutoReplyPrompts
         
-        # Execute the tool (inject caller_agent_id for authorization in kb_manager)
+        # Validate tool exists
+        if not tool_manager().is_tool_available(response.tool):
+            error_msg = LLMAutoReplyPrompts.TOOL_NOT_FOUND.format(tool_name=response.tool)
+            await self._send_llm_response_to_ui(
+                AgentReturnResponse(
+                    return_to_agent=self,
+                    returning_agent=self,
+                    is_success=False,
+                    reasoning=error_msg
+                ).to_ui()
+            )
+            # Schedule error feedback to LLM for recovery
+            self._schedule(self.send_to_llm(f"Error: {error_msg}. {LLMAutoReplyPrompts.RECOVERY_INSTRUCTION}"))
+            return
+        
+        # Prepare tool arguments (inject caller_agent_id for authorization in kb_manager)
         args_with_caller = dict(response.args or {})
         args_with_caller.setdefault("caller_agent_id", self.id)
-        tool_result = run_tool(response.tool, args_with_caller)
         
         logger.info(f"🛠️ TOOL_CALL {self.id} -> {response.tool} args={args_with_caller}")
         
-        # Emit a TOOL_CALL message to frontend immediately (fail-fast)
-        context_usage = self._calculate_context_usage()
-        await frontend_api().send_to_agent(self.session_ref).agent_response(
-            response.to_ui(self.config.model, self.id),
-            context_usage,
+        # Send tool call announcement and tool call details in one call
+        await frontend_api().send_to_agent(self.session_ref).tool_call_announcement(
+            response.to_ui(),
+            self._calculate_context_usage(),
         )
+        
+        # Execute the tool
+        tool_result = self._tool_runner.run_tool(response.tool, args_with_caller)
 
-        # Add tool result to conversation
-        tool_message = Message(
-            id=str(uuid.uuid4()),
-            agent_id=self.id,
-            content=tool_result.result,
-            message_type=MessageType.TOOL_RETURN,
-            timestamp=datetime.now().isoformat(),
-            tool_name=response.tool,
-            tool_result=tool_result.result,
-            action=tool_result.action,
-            reasoning=""
+        # Create proper tool return response and add to conversation
+        tool_return_response = ToolReturnResponse(
+            tool=response.tool,
+            result=tool_result.result,
+            success=True,
+            reasoning=f"Tool {response.tool} executed successfully",
+            agent=self
         )
-        self.history.append_existing_message(tool_message)
+        tool_ui_response = tool_return_response.to_ui()
+        self.history.append_llm_response(tool_ui_response)
 
         # Emit TOOL_RETURN to frontend as a separate message (fail-fast)
         context_usage = self._calculate_context_usage()
         await frontend_api().send_to_agent(self.session_ref).agent_response(
-            ToolReturnResponse(tool=response.tool, result=tool_result.result, success="True", reasoning=f"Tool {response.tool} executed successfully", agent=self).to_ui(),
+            tool_ui_response,
             context_usage,
         )
         
-        # Schedule continuation with tool result instead of direct recursion
-        self._schedule(self._continue_after_tool(response.tool, tool_result.result))
+        # Schedule continuation with tool result
+        self._schedule(self.send_to_llm(f"Tool {response.tool} returned: {tool_result.result}"))
+    
         
-        # Return immediate tool call response
-        return response.to_ui(self.config.model, self.id)
-    
-    def _handle_tool_return(self, response: ToolReturnResponse) -> UILLMResponse:
-        """Handle tool return - this should not happen in normal flow"""
-        return response.to_ui(self.config.model, self.id)
-    
-    def _handle_agent_delegate(self, response: AgentDelegateResponse) -> UILLMResponse:
-        """Handle agent delegation - delegate to another agent or fail if not found.
-        Also forwards the call to the target agent (auto-creates instance/session) and emits AGENT_RETURN back to caller when done."""
-        from objects_registry import agent_manager, frontend_api
+    async def _send_llm_response_to_ui(self, llm_response: UILLMResponse) -> None:
+        """Helper method to append LLM response to history and send to UI"""
+        self.history.append_llm_response(llm_response)
+        
+        from objects_registry import frontend_api
+        await frontend_api().send_to_agent(self.session_ref).agent_response(
+            llm_response,
+            self._calculate_context_usage()
+        )
 
-        target = response.agent_id
-        caller_session_id = self.session_id
-        # Resolve & self-delegation guard
+    async def _handle_agent_delegate(self, response: AgentDelegateResponse) -> None:
+        """Handle agent delegation - delegate to another agent or fail if not found."""
+        from objects_registry import frontend_api
+        from llm_auto_reply_prompts import LLMAutoReplyPrompts
+        
+        await self._handle_agent_orchestration(
+            response=response,
+            operation_type=OperationType.DELEGATE,
+            empty_input_error=LLMAutoReplyPrompts.EMPTY_USER_INPUT_DELEGATE,
+            agent_not_found_error=LLMAutoReplyPrompts.AGENT_NOT_FOUND_DELEGATE,
+            self_operation_error=LLMAutoReplyPrompts.SELF_DELEGATION,
+            send_announcement=lambda target_instance: frontend_api().send_to_agents(
+                self.session_ref, target_instance.session_ref
+            ).delegation_announcement(response.reasoning)
+        )
+    
+    async def _handle_agent_call(self, response: AgentCallResponse) -> None:
+        """Handle agent call - verify agent exists, otherwise return failure."""
+        from objects_registry import frontend_api
+        from llm_auto_reply_prompts import LLMAutoReplyPrompts
+        
+        await self._handle_agent_orchestration(
+            response=response,
+            operation_type=OperationType.CALL,
+            empty_input_error=LLMAutoReplyPrompts.EMPTY_USER_INPUT_CALL,
+            agent_not_found_error=LLMAutoReplyPrompts.AGENT_NOT_FOUND_CALL,
+            self_operation_error=LLMAutoReplyPrompts.SELF_CALL,
+            send_announcement=lambda target_instance: frontend_api().send_to_agents(
+                self.session_ref, target_instance.session_ref
+            ).agent_call_announcement(f"Agent is waiting for {target_instance.name} to complete the task: {response.reasoning}")
+        )
+    
+    async def _handle_agent_orchestration(
+        self, 
+        response: Union[AgentDelegateResponse, AgentCallResponse],
+        operation_type: OperationType,
+        empty_input_error: str,
+        agent_not_found_error: str,
+        self_operation_error: str,
+        send_announcement: Callable
+    ) -> None:
+        """Common logic for agent delegation and calling operations."""
+        from objects_registry import agent_manager, frontend_api
+        from llm_auto_reply_prompts import LLMAutoReplyPrompts
+
+        # Validate user_input (fail-fast)
+        if not response.user_input:
+            await self._handle_orchestration_error(empty_input_error)
+            return
+
         try:
-            target_cfg, is_self = self._resolve_target_agent(target)
+            target_cfg, is_self = self._resolve_target_agent(response.agent_id)
         except Exception as e:
-            return self._send_failure_return(caller_session_id, str(e), "TARGET_NOT_FOUND")
+            await self._handle_orchestration_error(agent_not_found_error, str(e))
+            return
 
         if is_self:
-            return self._send_failure_return(caller_session_id, "Self-delegation is not allowed", "SELF_DELEGATION")
+            await self._handle_orchestration_error(self_operation_error)
+            return
 
-        # Fire-and-forget: actually invoke the target agent with provided user_input
-        async def _run_target_and_return():
-            try:
-                mgr = agent_manager()
-                resolved_id = target_cfg.id
-                target_instance = mgr.create_agent(resolved_id)
-                forwarded_input = response.user_input or ""
-                if not forwarded_input:
-                    raise ValueError(f"Empty user_input in AGENT_DELEGATE for target '{resolved_id}'")
-                logger.info(f"🔁 AUTO-FWD {self.id} -> {resolved_id}: {forwarded_input}")
-                self._delegate_to_agent(
-                    target_instance,
-                    forwarded_input,
-                    response.reasoning,
-                )
-            except Exception as e:
-                context_usage = self._calculate_context_usage()
-                await frontend_api().send_to_agent(self.session_ref).agent_response(
-                    AgentReturnResponse(
-                        reasoning=str(e),
-                        agent=self.id,
-                        returning_agent=self.id,
-                        success="False"
-                    ).to_ui(self.config.model, self.id),
-                    context_usage,
-                )
-                raise
+        # Get or create target agent instance
+        target_instance = await agent_manager().get_random_agent_instance_by_id(target_cfg.id, is_create_if_none_exist=True)
+        if not target_instance:
+            # This should not happen since we validated the agent exists above
+            raise RuntimeError(f"Failed to get or create agent instance for {target_cfg.id}")
 
-        self._schedule(_run_target_and_return())
+        # Send operation-specific announcement
+        await send_announcement(target_instance)
 
-        delegate_msg = response.to_ui(self.config.model, self.id)
-        # Immediately emit to frontend (fire-and-forget)
-        self._schedule(frontend_api().send_to_agent(self.session_ref).agent_response(delegate_msg, self._calculate_context_usage()))
-        return delegate_msg
+        # Schedule the target agent's work
+        target_instance._schedule(target_instance.send_to_llm(response.user_input))
+
+        # Add operation message to this agent's history and UI
+        await self._send_llm_response_to_ui(response.to_ui())
+        
+        # Key difference: Agent calls block the caller, delegation doesn't
+        if operation_type == OperationType.CALL:
+            # For agent calls, the calling agent continues processing but waits for AGENT_RETURN
+            # The UI is blocked by the agent_call_announcement
+            # The agent will continue processing and handle AGENT_RETURN when it arrives
+            # No special action needed here - the agent continues its normal flow
+            pass
+        else:
+            # For delegation, the calling agent continues processing
+            # The UI is not blocked, and the caller can continue with other tasks
+            pass
     
-    def _handle_agent_call(self, response: AgentCallResponse) -> UILLMResponse:
-        """Handle agent call - verify agent exists, otherwise return failure.
-        Also invokes the target agent (auto-creates instance/session) and emits AGENT_RETURN back to caller when done."""
-        from objects_registry import agent_manager, frontend_api
-
-        target = response.agent_id
-        caller_session_id = self.session_id
-        try:
-            target_cfg, is_self = self._resolve_target_agent(target)
-        except Exception as e:
-            return self._send_failure_return(caller_session_id, str(e), "TARGET_NOT_FOUND")
-
-        if is_self:
-            return self._send_failure_return(caller_session_id, "Self-call is not allowed", "SELF_CALL")
-
-        # Fire-and-forget: actually invoke the target agent with provided user_input
-        import asyncio
-
-        async def _run_target_and_return():
-            try:
-                mgr = agent_manager()
-                resolved_id = target_cfg.id
-                target_instance = mgr.create_agent(resolved_id)
-                forwarded_input = response.user_input or ""
-                if not forwarded_input:
-                    raise ValueError(f"Empty user_input in AGENT_CALL for target '{resolved_id}'")
-                logger.info(f"🔁 AUTO-CALL {self.id} -> {resolved_id}: {forwarded_input}")
-                await self._do_agent_call_and_agent_return(
-                    target_instance,
-                    forwarded_input,
-                    response.reasoning,
-                )
-            except Exception as e:
-                context_usage = self._calculate_context_usage()
-                await frontend_api().send_to_agent(self.session_ref).agent_response(
-                    AgentReturnResponse(
-                        reasoning=str(e),
-                        agent=self.id,
-                        returning_agent=self.id,
-                        success="False"
-                    ).to_ui(self.config.model, self.id),
-                    context_usage,
-                )
-                raise
-
-        self._schedule(_run_target_and_return())
-
-        call_msg = response.to_ui(self.config.model, self.id)
-        # Immediately emit to frontend (fire-and-forget)
-        self._schedule(frontend_api().send_to_agent(self.session_ref).agent_response(call_msg, self._calculate_context_usage()))
-        return call_msg
+    async def _handle_orchestration_error(self, error_msg: str, additional_info: str = "") -> None:
+        """Handle orchestration errors with consistent error reporting and LLM recovery."""
+        from llm_auto_reply_prompts import LLMAutoReplyPrompts
+        
+        full_error = f"{error_msg}{f': {additional_info}' if additional_info else ''}"
+        
+        await self._send_llm_response_to_ui(
+            AgentReturnResponse(
+                return_to_agent=self,
+                returning_agent=self,
+                is_success=False,
+                reasoning=full_error
+            ).to_ui()
+        )
+        
+        # Schedule error feedback to LLM for recovery
+        self._schedule(self.send_to_llm(f"Error: {full_error}. {LLMAutoReplyPrompts.RECOVERY_INSTRUCTION}"))
     
-    def _handle_agent_return(self, response: AgentReturnResponse) -> UILLMResponse:
+    async def _handle_agent_return(self, response: AgentReturnResponse) -> None:
         """Handle agent return - return from another agent"""
-        return response.to_ui(self.config.model, self.id)
+        # Handle UI communication and history management
+        await self._send_llm_response_to_ui(response.to_ui())
+        
+        # Continue processing after receiving agent return
+        # Schedule continuation with the agent return result
+        self._schedule(self.send_to_llm(f"Agent {response.returning_agent} returned: {response.reasoning}"))
     
-    def _handle_refinement_response(self, response: RefinementResponse) -> UILLMResponse:
+    async def _handle_refinement_response(self, response: RefinementResponse) -> None:
         """Handle refinement response"""
-        return response.to_ui(self.config.model, self.id)
+        raise NotImplementedError('This is not implemented yet')
     
     def _calculate_context_usage(self):
         """Calculate context usage for the current conversation"""

@@ -64,6 +64,14 @@ ATeam is a multi-agent system with a React frontend and Python backend, featurin
 - Added case for `'agent_call_announcement'` in WebSocket message handler
 - Fixed frontend to properly handle agent call announcements from backend
 
+### Enhanced Agent Call Announcements
+- **Backend Enhancement**: Improved `_do_agent_call_and_agent_return` to create user-friendly waiting messages
+- **Enhanced Message Format**: "Agent is waiting for [Agent Name] to complete the task: [reason_text]"
+- **Frontend Implementation**: Added `onAgentCallAnnouncement` handler in `AgentChat.tsx` to display waiting messages in the chat interface
+- **User Experience**: Users now see clear waiting messages when their agent is waiting for another agent to complete a task
+- **Visual Feedback**: Waiting messages appear as system messages in the chat with metadata indicating the waiting state
+- **Auto-scroll**: Waiting messages automatically scroll into view to ensure users see the status update
+
 ### UI Response Refactoring (Completed)
 - **Goal**: Eliminate code duplication between backend response classes and UI response classes
 - **Completed**: 
@@ -90,6 +98,12 @@ ATeam is a multi-agent system with a React frontend and Python backend, featurin
   - ✅ **Fixed enum usage** - Now using actual enum values instead of string literals
   - ✅ **Eliminated field duplication** - Removed redundant `action` field redefinitions in child classes
 - **Benefits Achieved**:
+
+### Simplified Error Handling
+- **Removed redundant `_send_failure_return` method**: This method was unnecessary since `_do_agent_call_and_agent_return` already handles failures properly with its own try-catch block
+- **Improved AGENT_DELEGATE error handling**: Delegation failures (non-existing agent, self-delegation) now create proper error responses that are sent to the frontend and added to conversation history, rather than just being logged
+- **Cleaner code structure**: Eliminated redundant error handling paths and simplified the agent orchestration logic
+- **Better user experience**: System errors in delegation are now properly communicated to users through the UI
   - **Eliminated code duplication**: No more manual data copying between backend and UI response classes
   - **Improved separation of concerns**: Backend logic vs UI presentation are clearly separated
   - **Better maintainability**: Changes to backend responses don't break UI formatting
@@ -163,6 +177,17 @@ ATeam is a multi-agent system with a React frontend and Python backend, featurin
 ### ✅ Latest updates (Aug 2025)
 - **Method Renaming and Auto-Chaining Removal**: Renamed `get_response` to `send_to_llm` for clarity and removed auto-chaining logic from the method. Removed redundant `get_response_for_session` method since all callers can use `send_to_llm` directly. Auto-chaining is now handled explicitly in orchestration methods where needed, making the API more predictable and separating concerns.
 - **Agent-Level Queue and Lock Implementation**: Implemented agent-level task queue with sequential processing to prevent race conditions. Added agent-level lock to `send_to_llm` to ensure exclusive access. Changed all direct `send_to_llm` calls to use agent queue via `_schedule()`. Updated TOOL_CALL to use scheduler instead of recursion for consistent architecture. All agent work now goes through agent-specific queues ensuring proper ordering.
+- **Message-Driven Agent Orchestration**: Refactored agent calls to use message-driven completion instead of return-value orchestration. `send_to_llm` now returns `None` and agents emit `AGENT_RETURN` messages when truly complete (after all tool calls, sub-agent calls, etc.). This fixes the architectural flaw where agent calls would return prematurely before complex workflows were finished.
+- **Pure Direct UI Communication Architecture**: Implemented consistent UI communication pattern where each response handler manages its own UI communication and history management. Removed return values from `_handle_structured_response` and all handler methods, ensuring that every function that produces a response is responsible for its own UI communication. This eliminates the architectural contradiction between return-based and direct UI approaches, creating a consistent and maintainable codebase.
+- **UI Communication Helper Method**: Added `_send_llm_response_to_ui()` helper method to encapsulate the common pattern of appending LLM responses to history and sending them to the frontend. This reduces code duplication and creates cleaner, more maintainable handler methods.
+- **LLM Auto-Recovery System**: Implemented comprehensive error recovery system with `llm_auto_reply_prompts.py` module containing standardized error messages and recovery instructions. When LLM generates invalid requests (empty user_input, self-delegation, tool not found, etc.), the system now sends error feedback to the LLM allowing it to recover and generate corrected responses or ask user for help via `CHAT_RESPONSE_WAIT_USER_INPUT`. This prevents dead-end errors and creates a self-correcting system.
+- **Agent Orchestration Refactoring**: Completely refactored agent delegation and calling logic to eliminate unnecessary wrapper functions (`_delegate_to_agent`, `_do_agent_call_and_agent_return`). Now uses direct agent instance management (reuse existing instances when possible), direct scheduling on target agents, and consistent error handling with LLM recovery feedback. Removed local manager instances and fail-fast validation for empty user_input.
+- **Tool Validation Implementation**: Added `is_tool_available()` method to `ToolManager` class to validate tool existence before execution. This method re-discovers tools on each call to ensure latest data and returns boolean indicating whether the tool exists and can be executed. Integrated with LLM auto-recovery system to provide proper error feedback when tools are not found.
+- **Agent Instance Management Improvement**: Added `get_random_agent_instance_by_id()` method to `AgentManager` class to properly handle agent instance retrieval for orchestration. This method returns a random existing instance or creates a new one, ensures connection is established, and handles the session management internally. Replaces incorrect usage of `get_agent_by_id_and_session()` which required both ID and session parameters and raised errors instead of returning None.
+- **Agent Orchestration Logic Consolidation**: Refactored `_handle_agent_delegate` and `_handle_agent_call` methods to eliminate code duplication by introducing `_handle_agent_orchestration()` common method and `_handle_orchestration_error()` helper. This consolidation reduces code repetition for validation patterns, error handling, target agent resolution, and scheduling logic while maintaining operation-specific behavior through parameterized function calls.
+- **Agent Call vs Delegation UI Blocking**: Fixed critical difference between agent calls and delegation - agent calls now properly block the caller's UI and stop processing until `AGENT_RETURN` is received, while delegation allows the caller to continue processing. The frontend correctly handles `agent_call_announcement` with `expects_return=True` to block user input, and the backend now respects this by stopping the calling agent's processing flow for calls but not for delegation.
+- **Agent Return Continuation Logic**: Fixed agent return handling to ensure the calling agent continues processing after receiving `AGENT_RETURN`. The calling agent now schedules a continuation message with the agent return result, allowing the workflow to proceed naturally. This ensures that agent calls properly complete their full lifecycle: call → wait → return → continue.
+- **OperationType Enum**: Replaced string-based `operation_type` parameter in `_handle_agent_orchestration` with a proper `OperationType` enum (`DELEGATE`, `CALL`) to enforce type safety and prevent runtime errors from invalid operation types. This follows the fail-fast philosophy by catching invalid operation types at compile time.
 - **Code Cleanup and API Simplification**: Removed unused `save_conversation()`, `load_conversation()`, `get_available_sessions()`, `delete_session()`, and `get_agent_info()` methods from Agent class. Added `tools` property for cleaner API access. Simplified enum comparisons in `_parse_llm_response()` to work directly with `MessageType` enums instead of string values. Fixed indentation issues throughout the codebase.
 - **Enum Comparison Fix**: Updated `backend_api.py` to compare message types with enum values directly (`MessageType.SYSTEM`) instead of string literals (`"SYSTEM"`), improving type safety and refactoring resilience.
 - **Context Update Integration**: Refactored `agent_response` to require `context_usage` parameter and automatically send context update. Made `context_update` private (`_context_update`) and updated all call sites to pass `context_usage` from `_calculate_context_usage()`. Fixed `backend_api.py` summarization logic to use `agent.history` instead of `agent.messages`. Ensures consistent context tracking for every agent response.
@@ -184,6 +209,16 @@ ATeam is a multi-agent system with a React frontend and Python backend, featurin
 - Target invocation: `_invoke_target_and_return` ensures target connection internally, infers session from `target_instance`, and has a simplified signature (no `target_session_id`/`caller_session_id`). Docstring added.
 - Logging polish: reduced inbound chat logs to debug; clarified unknown message error text.
 - Lint status: All updated files pass lints.
+- **ToolRunner Refactoring**: Refactored tool execution to use `ToolRunner` class that encapsulates tool execution within agent context. Each `Agent` instance now has its own `ToolRunner` instance (`self._tool_runner`) initialized in the constructor. Tool calls now use `self._tool_runner.run_tool()` instead of the global `run_tool()` function. This properly enforces the fail-fast policy by requiring agent context at construction time and eliminates the need for optional agent parameters.
+- **ToolReturnResponse Boolean Success**: Improved type safety in `ToolReturnResponse` constructor by changing `success` parameter from `str` to `bool`. The constructor now converts the boolean to string internally (`"True"` or `"False"`) to maintain the required string format for the field while providing better type safety at the API level. Updated all call sites in `agent.py` and `tool_executor.py` to pass boolean values instead of strings.
+- **ToolManager Cleanup**: Removed redundant `execute_tool` method from `ToolManager` class as it was duplicating functionality now properly handled by the `ToolRunner` class. This eliminates the linter error and removes unnecessary code duplication.
+- **Tool Call Announcement System**: Implemented a "waiting for tool" state similar to agent call announcements. When a tool is called, the UI now shows "Agent is waiting for tool X to complete" and blocks user input. The system includes:
+  - **Backend Implementation**: Added `tool_call_announcement` method to `FrontendAPI._SingleAgentSender` with proper data structure (`_ToolCallAnnouncementData`)
+  - **Frontend Handler**: Added `onToolCallAnnouncement` handler in `FrontendAPIService` and `AgentChat` component
+  - **UI Blocking**: Tool call announcements create system messages with `isToolWaiting: true` metadata to block user input
+  - **Future-Proof Design**: The announcement system is separate from tool execution, ensuring no conflicts when tools update the UI directly in the future
+  - **Automatic Release**: Tool returns automatically release the blocking state through the existing `TOOL_RETURN` message flow
+  - **Clean API Design**: Refactored to use single `tool_call_announcement(tool_response, context_usage)` call that internally handles both announcement and tool call details, eliminating code duplication and tight coupling
 - Conversation Save/Load (history/): end-to-end UI; backend persists to `./history/<agent_id>/<session_id>.json` and returns `conversation_list`/`conversation_snapshot`.
 - Fail-fast tool events: always emit `TOOL_CALL`/`TOOL_RETURN`; errors surface to UI (no fallbacks).
 - Structured logging: log raw inbound frontend JSON, raw LLM responses, and final outbound responses; stream deltas suppressed; `backend/ateam.log` overwrites on start.
@@ -209,6 +244,7 @@ ATeam is a multi-agent system with a React frontend and Python backend, featurin
 - **Multi-Agent System**: YAML-based agent configuration with full CRUD operations
 - **LLM Integration**: Full integration with `llm` package and multiple providers
 - **Tool System**: Custom tool descriptor and executor with dynamic Python tool loading and execution
+- **ToolRunner Class**: Encapsulated tool execution within agent context using `ToolRunner` class that takes an `Agent` in its constructor. Each agent instance has its own `ToolRunner` instance, enforcing fail-fast policy by requiring agent context at construction time.
 - **Real-time Communication**: WebSocket-based chat system with centralized connection management
 - **Configuration Management**: YAML-based configuration files (agents.yaml, providers.yaml, models.yaml, prompts.yaml)
 - **Provider Management**: Support for OpenAI, Anthropic, Google, and local models

@@ -229,6 +229,41 @@ class AgentManager:
             raise ValueError(f"Session '{session_id}' not found for agent '{agent_id}'")
         return sessions[session_id]
     
+    async def get_random_agent_instance_by_id(self, agent_id: str, is_create_if_none_exist: bool = True) -> Optional[Agent]:
+        """Get a random agent instance by ID, optionally creating one if none exists.
+        
+        Args:
+            agent_id: The ID of the agent to get an instance for
+            is_create_if_none_exist: If True, create a new instance if none exists
+            
+        Returns:
+            Agent instance if found or created, None if not found and not creating
+        """
+        # Check if agent configuration exists
+        if not self.is_agent_config(agent_id):
+            return None
+        
+        # Get existing instances for this agent
+        if agent_id in self.agent_instances and self.agent_instances[agent_id]:
+            # Pick a random existing instance
+            import random
+            session_id = random.choice(list(self.agent_instances[agent_id].keys()))
+            agent_instance = self.agent_instances[agent_id][session_id]
+            
+            # Ensure the instance is connected
+            await agent_instance.ensure_connection()
+            return agent_instance
+        
+        # No existing instances
+        if is_create_if_none_exist:
+            # Create a new instance
+            agent_instance = self.create_agent(agent_id)
+            # Ensure the instance is connected
+            await agent_instance.ensure_connection()
+            return agent_instance
+        
+        return None
+    
     def close_session(self, session_id: str) -> None:
         """Close a session and clean up mappings"""
         if session_id in self.session_to_agent:

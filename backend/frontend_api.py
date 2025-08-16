@@ -148,6 +148,12 @@ class FrontendAPI:
         expects_return: bool
         timestamp: str
 
+    class _ToolCallAnnouncementData(BaseModel):
+        agent: str
+        tool_name: str
+        reason: str
+        timestamp: str
+
     class _SystemPromptMessage(_BaseOutbound):
         data: 'FrontendAPI._SystemPromptData'
 
@@ -159,6 +165,9 @@ class FrontendAPI:
 
     class _AgentCallAnnouncementMessage(_BaseOutbound):
         data: 'FrontendAPI._AgentCallAnnouncementData'
+
+    class _ToolCallAnnouncementMessage(_BaseOutbound):
+        data: 'FrontendAPI._ToolCallAnnouncementData'
 
     # ---------- Facades ----------
     class _SingleAgentSender:
@@ -317,6 +326,33 @@ class FrontendAPI:
                 "data": {"sessions": sessions},
             }
             await self._api._send_to_agent_message(self._ref, message)
+
+        async def tool_call_announcement(self, tool_response: UILLMResponse, context_usage: ContextUsageData) -> None:
+            now = datetime.now().isoformat()
+            
+            # Extract tool information from the tool response
+            tool_name = tool_response.tool_name or "unknown_tool"
+            waiting_message = f"Agent is waiting for tool {tool_name} to complete"
+            
+            # Send the tool call announcement
+            announcement_msg = FrontendAPI._ToolCallAnnouncementMessage(
+                type="tool_call_announcement",
+                message_id=f"msg_{datetime.now().timestamp()}",
+                timestamp=now,
+                agent_id=self._ref.agent_id,
+                agent_name=self._ref.agent_name,
+                session_id=self._ref.session_id,
+                data=FrontendAPI._ToolCallAnnouncementData(
+                    agent=self._ref.agent_name,
+                    tool_name=tool_name,
+                    reason=waiting_message,
+                    timestamp=now,
+                ),
+            )
+            await self._api._send_to_agent_message(self._ref, announcement_msg.model_dump())
+            
+            # Send the tool call details immediately after
+            await self.agent_response(tool_response, context_usage)
 
     class _DualAgentSender:
         def __init__(self, api: 'FrontendAPI', a_ref: 'SessionRef', b_ref: 'SessionRef'):

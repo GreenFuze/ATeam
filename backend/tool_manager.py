@@ -7,7 +7,6 @@ import json
 import ast
 from notification_utils import log_error, log_warning, log_info
 from tool_descriptor import get_tool_prompt_for_agent
-from tool_executor import run_tool
 
 class ToolManager:
     def __init__(self, tools_dir: str = "tools"):
@@ -152,10 +151,11 @@ class ToolManager:
         """Generate a prompt-friendly description of tools for an agent"""
         return get_tool_prompt_for_agent(tool_names, self)
     
-    def execute_tool(self, tool_name: str, **kwargs) -> Any:
-        """Execute a tool using the new tool executor"""
-        result = run_tool(tool_name, kwargs)
-        if result.success == "True":
-            return result.result
-        else:
-            raise RuntimeError(f"Tool execution failed: {result.result}") 
+    def is_tool_available(self, tool_name: str) -> bool:
+        """Check if a tool is available (exists and can be executed)"""
+        # Re-discover tools to ensure we have the latest data
+        self.tools = {}
+        self.discover_tools()
+        return tool_name in self.tools
+    
+ 

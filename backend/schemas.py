@@ -37,6 +37,10 @@ class PromptType(str, Enum):
     SYSTEM = "system"
     SEED = "seed"
 
+class OperationType(str, Enum):
+    DELEGATE = "delegate"
+    CALL = "call"
+
 # Base class for all structured responses
 class StructuredResponse(BaseModel):
     action: str
@@ -98,7 +102,7 @@ class ToolReturnResponse(StructuredResponse):
     result: str
     success: str = Field(..., pattern="^(True|False)$")
 
-    def __init__(self, tool: str, result: str, success: str, reasoning: str, agent: 'Agent'):
+    def __init__(self, tool: str, result: str, success: bool, reasoning: str, agent: 'Agent'):
         self._agent = agent
         self._model = agent.config.model
         self._agent_id = agent.id
@@ -109,7 +113,7 @@ class ToolReturnResponse(StructuredResponse):
         # Set the specific fields after parent constructor
         self.tool = tool
         self.result = result
-        self.success = success
+        self.success = "True" if success else "False"
 
     def to_ui(self) -> 'UIToolReturnResponse':
         """Convert to UI response"""

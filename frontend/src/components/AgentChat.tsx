@@ -174,6 +174,66 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             initialAutoScrollPendingRef.current = false;
           }
         },
+        onAgentCallAnnouncement: (_agentId: string, _sessionId: string, data: any) => {
+          // Only show announcements for the current agent
+          if (_agentId !== agentId) {
+            return;
+          }
+          
+          // Create a waiting message to show in the chat
+          const waitingMessage: Message = {
+            id: `waiting-${Date.now()}`,
+            agent_id: agentId,
+            content: data.reason || "Agent is waiting for another agent to complete a task...",
+            message_type: MessageType.SYSTEM,
+            timestamp: data.timestamp || new Date().toISOString(),
+            metadata: { 
+              ...(data.metadata || {}), 
+              isWaiting: true,
+              callingAgent: data.calling_agent,
+              calleeAgent: data.callee_agent,
+              expectsReturn: data.expects_return
+            },
+          };
+          
+          setMessages(prev => [...prev, waitingMessage]);
+          connectionManager.appendMessage(agentId, waitingMessage);
+          
+          // Auto-scroll to show the waiting message
+          if (atBottomRef.current) {
+            scrollToBottom();
+          }
+        },
+        onToolCallAnnouncement: (_agentId: string, _sessionId: string, data: any) => {
+          // Only show announcements for the current agent
+          if (_agentId !== agentId) {
+            return;
+          }
+          
+          // Create a waiting message to show in the chat
+          const waitingMessage: Message = {
+            id: `tool-waiting-${Date.now()}`,
+            agent_id: agentId,
+            content: data.reason || "Agent is waiting for a tool to complete...",
+            message_type: MessageType.SYSTEM,
+            timestamp: data.timestamp || new Date().toISOString(),
+            metadata: { 
+              ...(data.metadata || {}), 
+              isWaiting: true,
+              isToolWaiting: true,
+              toolName: data.tool_name,
+              agent: data.agent
+            },
+          };
+          
+          setMessages(prev => [...prev, waitingMessage]);
+          connectionManager.appendMessage(agentId, waitingMessage);
+          
+          // Auto-scroll to show the waiting message
+          if (atBottomRef.current) {
+            scrollToBottom();
+          }
+        },
         onAgentResponse: (_agentId: string, _sessionId: string, data: any) => {
           // Assert that data is properly structured - if not, there's a backend bug
           if (!data) {
