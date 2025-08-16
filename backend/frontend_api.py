@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 from pydantic import BaseModel
 from fastapi import WebSocket, WebSocketDisconnect
-from schemas import Message, LLMResponse, ContextUsageData, MessageType, MessageIcon, SessionRef
+from schemas import Message, UILLMResponse, ContextUsageData, MessageType, MessageIcon, SessionRef
 
 # Lazy agent name resolver to avoid circular imports at module import time
 def _safe_agent_name(agent_id: str) -> str:
@@ -201,7 +201,7 @@ class FrontendAPI:
             )
             await self._api._send_to_agent_message(self._ref, msg.model_dump())
 
-        async def agent_response(self, response: LLMResponse, context_usage: ContextUsageData) -> None:
+        async def agent_response(self, response: UILLMResponse, context_usage: ContextUsageData) -> None:
             if response.metadata and response.metadata.get("already_sent"):
                 return
             assert response.message_type is not None, "response.message_type is required"
@@ -239,6 +239,11 @@ class FrontendAPI:
             }
             logger.info(f"📤 Agent -> {self._ref.agent_id}: {json.dumps(message)}")
             await self._api._send_to_agent_message(self._ref, message)
+            
+            # Mark as already sent after successful send
+            if response.metadata is None:
+                response.metadata = {}
+            response.metadata["already_sent"] = True
 
         async def stream(self, content_delta: str) -> None:
             message = {

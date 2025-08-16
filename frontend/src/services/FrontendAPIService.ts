@@ -6,7 +6,7 @@
 import { connectionManager } from './ConnectionManager';
 
 export interface FrontendAPIMessage {
-  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
+  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_call_announcement' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
   message_id: string;
   timestamp: string;
   agent_id?: string;
@@ -28,6 +28,7 @@ export interface FrontendAPIHandlers {
   onError?: (agentId: string, sessionId: string, error: any) => void;
   onContextUpdate?: (agentId: string, sessionId: string, data: any) => void;
   onNotification?: (type: string, message: string) => void;
+  onAgentCallAnnouncement?: (agentId: string, sessionId: string, data: any) => void;
   onAgentListUpdate?: (data: any) => void;
   onAgentListUpdateSidebar?: (data: any) => void;
   onAgentListUpdateAgentsPage?: (data: any) => void;
@@ -216,6 +217,13 @@ export class FrontendAPIService {
         console.log('📥 [Frontend] Processing context_update for agent:', message.agent_id);
         if (this.handlers.onContextUpdate && message.agent_id) {
           this.handlers.onContextUpdate(message.agent_id, sessionId, message.data);
+        }
+        break;
+
+      case 'agent_call_announcement':
+        console.log('📥 [Frontend] Processing agent_call_announcement for agent:', message.agent_id);
+        if (this.handlers.onAgentCallAnnouncement && message.agent_id) {
+          this.handlers.onAgentCallAnnouncement(message.agent_id, sessionId, message.data);
         }
         break;
 

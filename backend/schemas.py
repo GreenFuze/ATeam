@@ -1,7 +1,10 @@
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Any, Union
+from typing import List, Dict, Optional, Any, Union, TYPE_CHECKING
 from enum import Enum
 import json
+
+if TYPE_CHECKING:
+    from agent import Agent
 
 class UnknownActionError(Exception):
     """Raised when an LLM response contains an unknown or illegal action type."""
@@ -39,46 +42,145 @@ class StructuredResponse(BaseModel):
     action: str
     reasoning: str
 
+
+
 # Specific response classes
 class ChatResponse(StructuredResponse):
-    action: str = Field(default="CHAT_RESPONSE")
     content: str
-    icon: Optional[MessageIcon] = None
+
+    def __init__(self, content: str, reasoning: str, agent: 'Agent'):
+        self._agent = agent
+        self._model = agent.config.model
+        self._agent_id = agent.id
+        super().__init__(
+            action=MessageType.CHAT_RESPONSE.value,
+            reasoning=reasoning
+        )
+        # Set the specific fields after parent constructor
+        self.content = content
+
+    def to_ui(self, icon: Optional[MessageIcon] = None) -> 'UIChatResponse':
+        """Convert to UI response"""
+        return UIChatResponse(self, self._model, self._agent_id, icon)
 
 class ErrorChatResponse(ChatResponse):
-    def __init__(self, error: Exception | str):
+    def __init__(self, error: Exception | str, agent: 'Agent'):
         content = f"Error: {str(error)}"
         # Default reasoning per spec
-        super().__init__(content=content, reasoning="An error has occurred; details are in the content.", icon=MessageIcon.ERROR)
+        super().__init__(content=content, reasoning="An error has occurred; details are in the content.", agent=agent)
+
+    def to_ui(self) -> 'UIErrorChatResponse':
+        """Convert to UI response"""
+        return UIErrorChatResponse(self, self._model, self._agent_id, MessageIcon.ERROR)
 
 class ToolCallResponse(StructuredResponse):
-    action: str = Field(default="TOOL_CALL")
     tool: str
     args: Dict[str, Any]
 
-class ToolReturnResponse(BaseModel):
-    action: str = Field(default="TOOL_RETURN")
+    def __init__(self, tool: str, args: Dict[str, Any], reasoning: str, agent: 'Agent'):
+        self._agent = agent
+        self._model = agent.config.model
+        self._agent_id = agent.id
+        super().__init__(
+            action=MessageType.TOOL_CALL.value,
+            reasoning=reasoning
+        )
+        # Set the specific fields after parent constructor
+        self.tool = tool
+        self.args = args
+
+    def to_ui(self) -> 'UIToolCallResponse':
+        """Convert to UI response"""
+        return UIToolCallResponse(self, self._model, self._agent_id)
+
+class ToolReturnResponse(StructuredResponse):
     tool: str
     result: str
     success: str = Field(..., pattern="^(True|False)$")
 
+    def __init__(self, tool: str, result: str, success: str, reasoning: str, agent: 'Agent'):
+        self._agent = agent
+        self._model = agent.config.model
+        self._agent_id = agent.id
+        super().__init__(
+            action=MessageType.TOOL_RETURN.value,
+            reasoning=reasoning
+        )
+        # Set the specific fields after parent constructor
+        self.tool = tool
+        self.result = result
+        self.success = success
+
+    def to_ui(self) -> 'UIToolReturnResponse':
+        """Convert to UI response"""
+        return UIToolReturnResponse(self, self._model, self._agent_id)
+
 class AgentDelegateResponse(StructuredResponse):
-    action: str = Field(default="AGENT_DELEGATE")
-    agent: str
-    caller_agent: str
+    agent_id: str
+    caller_agent_id: str
     user_input: str
+
+    def __init__(self, target_agent: 'Agent', caller_agent: 'Agent', user_input: str, reasoning: str):
+        self._caller_agent = caller_agent
+        self._model = caller_agent.config.model
+        self._agent_id = caller_agent.id
+        super().__init__(
+            action=MessageType.AGENT_DELEGATE.value,
+            reasoning=reasoning
+        )
+        # Set the specific fields after parent constructor
+        self.agent_id = target_agent.id
+        self.caller_agent_id = caller_agent.id
+        self.user_input = user_input
+
+    def to_ui(self) -> 'UIAgentDelegateResponse':
+        """Convert to UI response"""
+        return UIAgentDelegateResponse(self, self._model, self._agent_id)
 
 class AgentCallResponse(StructuredResponse):
-    action: str = Field(default="AGENT_CALL")
-    agent: str
-    caller_agent: str
+    agent_id: str
+    caller_agent_id: str
     user_input: str
 
+    def __init__(self, target_agent: 'Agent', caller_agent: 'Agent', user_input: str, reasoning: str):
+        self._caller_agent = caller_agent
+        self._model = caller_agent.config.model
+        self._agent_id = caller_agent.id
+        super().__init__(
+            action=MessageType.AGENT_CALL.value,
+            reasoning=reasoning
+        )
+        # Set the specific fields after parent constructor
+        self.agent_id = target_agent.id
+        self.caller_agent_id = caller_agent.id
+        self.user_input = user_input
+
+    def to_ui(self) -> 'UIAgentCallResponse':
+        """Convert to UI response"""
+        return UIAgentCallResponse(self, self._model, self._agent_id)
+
 class AgentReturnResponse(StructuredResponse):
-    action: str = Field(default="AGENT_RETURN")
+    """Response from an agent call"""
     agent: str
     returning_agent: str
     success: str = Field(..., pattern="^(True|False)$")
+
+    def __init__(self, return_to_agent: 'Agent', returning_agent: 'Agent', is_success: bool, reasoning: str):
+        self._return_to_agent = return_to_agent
+        self._model = return_to_agent.config.model
+        self._agent_id = return_to_agent.id
+        super().__init__(
+            action=MessageType.AGENT_RETURN.value,
+            reasoning=reasoning
+        )
+        # Set the specific fields after parent constructor
+        self.agent = return_to_agent.id
+        self.returning_agent = returning_agent.id
+        self.success = "True" if is_success else "False"
+
+    def to_ui(self) -> 'UIAgentReturnResponse':
+        """Convert to UI response"""
+        return UIAgentReturnResponse(self, self._model, self._agent_id)
 
 class RefinementChecklist(BaseModel):
     objective: bool
@@ -87,7 +189,7 @@ class RefinementChecklist(BaseModel):
     constraints: bool
 
 class RefinementResponse(BaseModel):
-    action: str = Field(default="REFINEMENT_RESPONSE")
+    action: str = Field(default=MessageType.REFINEMENT_RESPONSE.value)
     new_plan: str
     done: str = Field(..., pattern="^(yes|no)$")
     score: int = Field(..., ge=0, le=100)
@@ -95,16 +197,9 @@ class RefinementResponse(BaseModel):
     checklist: RefinementChecklist
     success: bool
 
-# Union type for all possible responses
-StructuredResponseType = Union[
-    ChatResponse,
-    ToolCallResponse,
-    ToolReturnResponse,
-    AgentDelegateResponse,
-    AgentCallResponse,
-    AgentReturnResponse,
-    RefinementResponse
-]
+    def to_ui(self, model: str, agent_id: str) -> 'UIRefinementResponse':
+        """Convert to UI response"""
+        return UIRefinementResponse(self, model, agent_id)
 
 class AgentConfig(BaseModel):
     id: str
@@ -179,7 +274,8 @@ class ChatSession(BaseModel):
     updated_at: str
     summary: Optional[str] = None
 
-class LLMResponse(BaseModel):
+class UILLMResponse(BaseModel):
+    """Base class for all UI-specific LLM responses"""
     content: str
     message_type: MessageType
     metadata: Dict[str, Any] = {}
@@ -193,7 +289,7 @@ class LLMResponse(BaseModel):
     target_agent_id: Optional[str] = None
 
     def as_message_to_agent(self, agent_id: str) -> 'Message':
-        """Convert this LLMResponse to a Message for the specified agent"""
+        """Convert this UILLMResponse to a Message for the specified agent"""
         import uuid
         from datetime import datetime
         
@@ -209,6 +305,154 @@ class LLMResponse(BaseModel):
             tool_name=self.tool_name,
             tool_parameters=self.tool_parameters,
             target_agent_id=self.target_agent_id
+        )
+
+
+class UIChatResponse(UILLMResponse):
+    """UI wrapper for ChatResponse"""
+    def __init__(self, chat_response: ChatResponse, model: str, agent_id: str, icon: Optional[MessageIcon] = None):
+        super().__init__(
+            content=chat_response.content,
+            message_type=MessageType.CHAT_RESPONSE,
+            metadata={
+                "model": model,
+                "agent_id": agent_id,
+                "action": chat_response.action,
+            },
+            action=chat_response.action,
+            reasoning=chat_response.reasoning,
+            icon=icon
+        )
+
+
+class UIErrorChatResponse(UILLMResponse):
+    """UI wrapper for ErrorChatResponse"""
+    def __init__(self, error_response: ErrorChatResponse, model: str, agent_id: str, icon: Optional[MessageIcon] = None):
+        super().__init__(
+            content=error_response.content,
+            message_type=MessageType.ERROR,
+            metadata={
+                "model": model,
+                "agent_id": agent_id,
+                "action": error_response.action,
+            },
+            action=error_response.action,
+            reasoning=error_response.reasoning,
+            icon=icon
+        )
+
+
+class UIToolCallResponse(UILLMResponse):
+    """UI wrapper for ToolCallResponse"""
+    def __init__(self, tool_call: ToolCallResponse, model: str, agent_id: str):
+        super().__init__(
+            content=f"Calling tool {tool_call.tool}",
+            message_type=MessageType.TOOL_CALL,
+            metadata={
+                "model": model,
+                "agent_id": agent_id,
+                "action": tool_call.action,
+                "tool": tool_call.tool,
+                "args": tool_call.args,
+            },
+            action=tool_call.action,
+            reasoning=tool_call.reasoning,
+            tool_name=tool_call.tool,
+            tool_parameters=tool_call.args
+        )
+
+
+class UIToolReturnResponse(UILLMResponse):
+    """UI wrapper for ToolReturnResponse"""
+    def __init__(self, tool_return: ToolReturnResponse, model: str, agent_id: str):
+        super().__init__(
+            content=tool_return.result,
+            message_type=MessageType.TOOL_RETURN,
+            metadata={
+                "model": model,
+                "agent_id": agent_id,
+                "action": tool_return.action,
+                "tool": tool_return.tool,
+                "success": tool_return.success,
+            },
+            action=tool_return.action,
+            tool_name=tool_return.tool
+        )
+
+
+class UIAgentDelegateResponse(UILLMResponse):
+    """UI wrapper for AgentDelegateResponse"""
+    def __init__(self, agent_delegate: AgentDelegateResponse, model: str, agent_id: str):
+        super().__init__(
+            content=f"Delegating to agent {agent_delegate.agent_id}",
+            message_type=MessageType.AGENT_DELEGATE,
+            metadata={
+                "model": model,
+                "agent_id": agent_id,
+                "action": agent_delegate.action,
+                "target_agent": agent_delegate.agent_id,
+                "caller_agent": agent_delegate.caller_agent_id,
+            },
+            action=agent_delegate.action,
+            reasoning=agent_delegate.reasoning,
+            target_agent_id=agent_delegate.agent_id
+        )
+
+
+class UIAgentCallResponse(UILLMResponse):
+    """UI wrapper for AgentCallResponse"""
+    def __init__(self, agent_call: AgentCallResponse, model: str, agent_id: str):
+        super().__init__(
+            content=f"Calling agent {agent_call.agent_id}",
+            message_type=MessageType.AGENT_CALL,
+            metadata={
+                "model": model,
+                "agent_id": agent_id,
+                "action": agent_call.action,
+                "target_agent": agent_call.agent_id,
+                "caller_agent": agent_call.caller_agent_id,
+            },
+            action=agent_call.action,
+            reasoning=agent_call.reasoning,
+            target_agent_id=agent_call.agent_id
+        )
+
+
+class UIAgentReturnResponse(UILLMResponse):
+    """UI wrapper for AgentReturnResponse"""
+    def __init__(self, agent_return: AgentReturnResponse, model: str, agent_id: str):
+        super().__init__(
+            content=f"Return from agent {agent_return.returning_agent}",
+            message_type=MessageType.AGENT_RETURN,
+            metadata={
+                "model": model,
+                "agent_id": agent_id,
+                "action": agent_return.action,
+                "returning_agent": agent_return.returning_agent,
+                "success": agent_return.success,
+            },
+            action=agent_return.action,
+            reasoning=agent_return.reasoning,
+            target_agent_id=agent_return.returning_agent
+        )
+
+
+class UIRefinementResponse(UILLMResponse):
+    """UI wrapper for RefinementResponse"""
+    def __init__(self, refinement: RefinementResponse, model: str, agent_id: str):
+        super().__init__(
+            content=f"Refinement: {refinement.new_plan}",
+            message_type=MessageType.REFINEMENT_RESPONSE,
+            metadata={
+                "model": model,
+                "agent_id": agent_id,
+                "action": refinement.action,
+                "done": refinement.done,
+                "score": refinement.score,
+                "success": refinement.success,
+            },
+            action=refinement.action,
+            reasoning=refinement.why
         )
 
 class SessionRef(BaseModel):
@@ -248,7 +492,7 @@ class ChatMessageRequest(BaseModel):
 class ChatMessageResponse(BaseModel):
     message: Message
     session_id: str
-    agent_response: LLMResponse 
+    agent_response: UILLMResponse 
 
 class ProviderInfo(BaseModel):
     """Provider configuration information stored in YAML"""
@@ -321,12 +565,12 @@ class ContextUsageData(BaseModel):
 class ConversationResponseData(BaseModel):
     """Response data for conversation processing"""
     session_id: str
-    agent_response: LLMResponse
+    agent_response: UILLMResponse
     session: ChatSession
     context_usage: float = Field(ge=0.0, le=100.0, description="Percentage of context window used")
     tokens_used: Optional[int] = Field(None, ge=0, description="Number of tokens used")
     context_window: Optional[int] = Field(None, ge=0, description="Total context window size")
-    messages_to_send: List[LLMResponse] = Field(default_factory=list, description="Messages to send to frontend")
+    messages_to_send: List[UILLMResponse] = Field(default_factory=list, description="Messages to send to frontend")
 
 class ConversationData(BaseModel):
     """Conversation data for persistence"""
@@ -417,7 +661,7 @@ class MessageHistory:
         self._messages = SafeList()
         self._agent_id = agent_id
     
-    def append_llm_response(self, llm_response: 'LLMResponse') -> None:
+    def append_llm_response(self, llm_response: 'UILLMResponse') -> None:
         """Append LLM response as message"""
         message = llm_response.as_message_to_agent(self._agent_id)
         self._messages.append(message)
@@ -452,5 +696,9 @@ class MessageHistory:
     def insert(self, index: int, message: 'Message') -> None:
         """Insert message at index"""
         self._messages.insert(index, message)
+
+# Type alias for all structured response types
+StructuredResponseType = Union[ChatResponse, ErrorChatResponse, ToolCallResponse, ToolReturnResponse, 
+                              AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, RefinementResponse]
 
  

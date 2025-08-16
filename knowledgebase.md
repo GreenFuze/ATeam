@@ -1,45 +1,169 @@
 # ATeam Multi-Agent System - Knowledge Base
 
 ## Project Overview
-ATeam is a full-stack web agent system using Python FastAPI backend and React frontend, featuring a pluggable multi-agent architecture with LLM integration using the `llm` Python package.
+ATeam is a multi-agent system with a React frontend and Python backend, featuring real-time WebSocket communication, agent orchestration, and tool integration.
 
-## Architecture Summary
+## Architecture
 
-### Backend (Python/FastAPI)
-- **FastAPI**: Modern async web framework serving both API and frontend static files
-- **LLM Integration**: Using `llm` package for multi-provider support (OpenAI, Anthropic, Google, Local)
-- **Multi-Agent System**: Pluggable agent architecture with YAML-based configuration
-- **Tool System**: Dynamic Python tool loading and execution
-- **WebSocket Support**: Real-time chat communication
-- **Single Server Setup**: Backend serves built frontend static files from `backend/static/`
-- **Strict Typing**: Pydantic models ensure type safety across the codebase
-- **Dynamic Model Management**: ModelsManager for runtime model discovery and settings
-- **Schema Management**: SchemaManager for JSON schema CRUD operations
-- **Context Window Tracking**: Real-time context usage calculation and display
-- **Global Notification System**: System health monitoring with proactive issue detection
+### Backend Structure
+- **agent.py**: Core agent logic, conversation management, LLM interaction, and orchestration
+- **agent_manager.py**: Manages agent instances and sessions
+- **backend_api.py**: Handles incoming WebSocket messages from frontend
+- **frontend_api.py**: Sends messages to frontend via WebSocket
+- **schemas.py**: Pydantic models for data structures
+- **tool_executor.py**: Executes tools and manages tool results
 
-### Frontend (React/TypeScript)
-- **React 18 + TypeScript**: Modern UI framework with type safety
-- **Mantine v7**: UI component library with dark mode
-- **TailwindCSS**: Utility-first CSS framework
-- **Vite**: Build tool for production static files
-- **Dark Mode**: Consistent dark theme throughout
-- **Enhanced Model Settings**: Dynamic forms with proper field types
-- **Global Notifications**: System health monitoring and alerts
-- **Context Progress**: Visual context window usage tracking
-- **Model Warning Icons**: Visual indicators for models needing configuration
+### Frontend Structure
+- **React + TypeScript**: Modern UI with real-time updates
+- **WebSocket Communication**: Dual WebSocket architecture (FrontendAPI + BackendAPI)
+- **Component-based**: Modular UI components for different features
 
-### Development Workflow
-- **Single Server**: Backend serves built frontend static files from `backend/static/`
-- **Build Process**: PowerShell script (`build_and_run.ps1`) builds frontend and copies to backend
-- **Production Mode**: Backend serves both API and frontend from port 8000
-- **Type Safety**: Pydantic validation ensures data integrity between frontend and backend
+## Key Concepts
+
+### Agent Orchestration
+- **Delegation**: Agent hands off work to another agent without expecting return
+- **Calling**: Agent calls another agent and expects a response
+- **Agent-level Queue**: Each agent has its own task queue for sequential processing
+
+### Message Types
+- **Structured Responses**: Backend response classes (AgentReturnResponse, ToolCallResponse, etc.)
+- **UI Responses**: Frontend-specific response classes (UILLMResponse and derivatives)
+- **WebSocket Messages**: Real-time communication between frontend and backend
+
+### Thread Safety
+- **SafeList**: Thread-safe list wrapper with RLock
+- **MessageHistory**: Thread-safe conversation history management
+- **Agent-level Locks**: Async locks for agent-specific operations
+
+## Recent Changes
+
+### Agent-Level Queue and Lock Implementation
+- Added `_task_queue` and `_worker_task` to each agent for sequential processing
+- Implemented `_start_worker()` and `_process_tasks()` for agent-specific task scheduling
+- Added `_llm_lock` to prevent concurrent LLM calls within an agent
+- Modified all external calls to `send_to_llm` to use `self._schedule()`
+- Used `asyncio.Future` for cases where results need to be awaited from scheduled tasks
+- Removed fallback to global scheduler to enforce fail-fast policy
+
+### Code Cleanup and API Simplification
+- Removed unused methods: `save_conversation`, `load_conversation`, `get_available_sessions`, `delete_session`, `get_agent_info`
+- Added `Agent.tools` property for cleaner access to agent configuration
+- Simplified enum comparisons to use enum directly instead of string values
+- Fixed indentation issues throughout the codebase
+- Removed `AgentInfo` schema as it was unused
+
+### Error Handling Improvements
+- Added try-catch around `await future` in `_do_agent_call_and_agent_return` for target agent failure handling
+- Created proper error responses with `success: "False"` when target agents fail
+- Added error logging and proper error message formatting
+- Ensured error responses are added to history and sent to frontend
+
+### Frontend Message Handler Fixes
+- Added missing `onAgentCallAnnouncement` handler to `FrontendAPIHandlers` interface
+- Added `'agent_call_announcement'` to `FrontendAPIMessage` type definition
+- Added case for `'agent_call_announcement'` in WebSocket message handler
+- Fixed frontend to properly handle agent call announcements from backend
+
+### UI Response Refactoring (Completed)
+- **Goal**: Eliminate code duplication between backend response classes and UI response classes
+- **Completed**: 
+  - ✅ Renamed `LLMResponse` to `UILLMResponse` for clarity
+  - ✅ Created UI-specific wrapper classes: `UIChatResponse`, `UIErrorChatResponse`, `UIToolCallResponse`, `UIToolReturnResponse`, `UIAgentDelegateResponse`, `UIAgentCallResponse`, `UIAgentReturnResponse`, `UIRefinementResponse`
+  - ✅ Each wrapper class accepts the corresponding backend response class in constructor
+  - ✅ Updated imports in agent.py and frontend_api.py
+  - ✅ Updated all usage in agent.py to use appropriate UI wrapper classes
+  - ✅ Fixed frontend_api.py to use UILLMResponse
+  - ✅ All function signatures and return types updated
+  - ✅ All LLMResponse constructor calls replaced with UI wrapper classes
+  - ✅ Code compiles and imports successfully
+  - ✅ **Added `to_ui()` methods to all Response classes** - Cleaner conversion from backend to UI
+  - ✅ **Removed explicit action specifications** - Actions are now internal based on response type
+  - ✅ **Improved type safety** - All Response classes now have proper constructors and validation
+  - ✅ **Eliminated fallback logic** - AGENT_RETURN now requires explicit reasoning (fail-fast)
+  - ✅ **Added strongly typed constructors** - All Response classes now take Agent objects instead of strings
+  - ✅ **Parameterless `to_ui()` methods** - No need to pass model and agent_id manually
+  - ✅ **Fixed ToolReturnResponse inheritance** - Now properly inherits from StructuredResponse
+  - ✅ **Improved field naming** - Changed `agent`/`caller_agent` to `agent_id`/`caller_agent_id` for clarity
+  - ✅ **Fixed constructor parameter issues** - All Response classes now properly set fields after parent constructor
+  - ✅ **Fixed all linter errors** - No more parameter name conflicts with parent classes
+  - ✅ **Proper UI concern separation** - Icon field moved from backend Response classes to UI wrapper classes
+  - ✅ **Fixed enum usage** - Now using actual enum values instead of string literals
+  - ✅ **Eliminated field duplication** - Removed redundant `action` field redefinitions in child classes
+- **Benefits Achieved**:
+  - **Eliminated code duplication**: No more manual data copying between backend and UI response classes
+  - **Improved separation of concerns**: Backend logic vs UI presentation are clearly separated
+  - **Better maintainability**: Changes to backend responses don't break UI formatting
+  - **Clearer naming**: `UILLMResponse` clearly indicates it's for UI, not the actual LLM response
+  - **Type safety**: Each UI response type knows how to format its backend counterpart
+  - **Cleaner API**: `response.to_ui()` is much cleaner than manual wrapper construction
+  - **Fail-fast compliance**: No more fallback logic for required fields like `reasoning`
+  - **Internal consistency**: Actions are automatically set based on response type, reducing errors
+  - **Stronger type safety**: Agent objects instead of strings provide better compile-time checking
+  - **Better encapsulation**: Response classes can extract all needed information from Agent objects
+  - **Reduced parameter passing**: No need to manually pass model and agent_id everywhere
+  - **Consistent inheritance**: All Response classes now properly inherit from StructuredResponse
+  - **Clear field naming**: Field names now explicitly indicate they contain IDs, not full objects
+  - **Proper constructor patterns**: All Response classes follow the correct Pydantic inheritance pattern
+  - **UI concern separation**: Icon field is now properly handled in UI classes where it belongs
+  - **Proper enum usage**: Using actual enum values instead of string literals for better type safety
+  - **Memory efficiency**: No field duplication in child classes, single source of truth for `action` field
+
+## Technical Decisions
+
+### Fail-Fast Policy
+- System immediately raises exceptions on errors instead of silent logging
+- No fallback logic unless explicitly stated
+- Ensures bugs are surfaced immediately rather than hidden
+
+### Single-Session Invariant
+- Each `Agent` instance represents exactly one session
+- Removed confusing `get_response_for_session` method
+- Simplified agent API by enforcing this invariant
+
+### Agent-Level Scheduling
+- Each agent has its own task queue to ensure sequential processing
+- Prevents race conditions within an agent
+- Allows concurrent processing across different agents
+
+### Message History Management
+- `MessageHistory` class wraps `SafeList` for thread-safe conversation management
+- Provides semantic methods: `append_llm_response()`, `append_user_message()`
+- Handles conversion from `LLMResponse` to `Message` objects automatically
+
+## Known Issues
+
+### Frontend Agent Call Announcement Handling
+- Frontend now receives `agent_call_announcement` messages but UI implementation for showing "Agent X is waiting for Agent Y's response" is not yet implemented
+- Need to add UI logic to disable input during agent calls and show appropriate status messages
+
+### UI Response Refactoring
+- Work in progress to eliminate duplication between backend and UI response classes
+- Need to complete replacement of all `LLMResponse` instances with appropriate UI wrapper classes
+- Need to test refactored code thoroughly
+
+## Future Improvements
+
+### Code Organization
+- Consider breaking down large methods further
+- Add more comprehensive error handling
+- Improve type safety throughout the codebase
+
+### Performance
+- Optimize agent lookup in AgentManager
+- Consider caching for frequently accessed data
+- Monitor and optimize WebSocket message handling
+
+### User Experience
+- Implement proper UI feedback for agent calls and delegations
+- Add better error messages and recovery mechanisms
+- Improve real-time status updates
 
 ## Implementation Status
 
 ### ✅ Latest updates (Aug 2025)
 - **Method Renaming and Auto-Chaining Removal**: Renamed `get_response` to `send_to_llm` for clarity and removed auto-chaining logic from the method. Removed redundant `get_response_for_session` method since all callers can use `send_to_llm` directly. Auto-chaining is now handled explicitly in orchestration methods where needed, making the API more predictable and separating concerns.
 - **Agent-Level Queue and Lock Implementation**: Implemented agent-level task queue with sequential processing to prevent race conditions. Added agent-level lock to `send_to_llm` to ensure exclusive access. Changed all direct `send_to_llm` calls to use agent queue via `_schedule()`. Updated TOOL_CALL to use scheduler instead of recursion for consistent architecture. All agent work now goes through agent-specific queues ensuring proper ordering.
+- **Code Cleanup and API Simplification**: Removed unused `save_conversation()`, `load_conversation()`, `get_available_sessions()`, `delete_session()`, and `get_agent_info()` methods from Agent class. Added `tools` property for cleaner API access. Simplified enum comparisons in `_parse_llm_response()` to work directly with `MessageType` enums instead of string values. Fixed indentation issues throughout the codebase.
 - **Enum Comparison Fix**: Updated `backend_api.py` to compare message types with enum values directly (`MessageType.SYSTEM`) instead of string literals (`"SYSTEM"`), improving type safety and refactoring resilience.
 - **Context Update Integration**: Refactored `agent_response` to require `context_usage` parameter and automatically send context update. Made `context_update` private (`_context_update`) and updated all call sites to pass `context_usage` from `_calculate_context_usage()`. Fixed `backend_api.py` summarization logic to use `agent.history` instead of `agent.messages`. Ensures consistent context tracking for every agent response.
 - **MessageHistory implementation**: Created `MessageHistory` class in `schemas.py` that wraps `SafeList` with semantic methods (`append_llm_response()`, `append_user_message()`, `append_existing_message()`). Takes `agent_id` in constructor, eliminating redundant parameter passing. Replaced all `self.messages` usage in `Agent` class with clean `self.history` interface.
@@ -66,7 +190,7 @@ ATeam is a full-stack web agent system using Python FastAPI backend and React fr
 - Agent settings persistence: frontend includes immutable `id` on update; changes reliably saved to `agents.yaml`. Removed full-page reload after save; list refreshes via WS.
 - Embedding Settings: dedicated Settings → Embedding tab. No default model; user must select. Saved via WS and used by `embedding_manager`/`kb_manager`.
 - KB/Plan manager: `kb_manager` abstracts Chroma with per-agent storage at `backend/knowledgebase/<agent_id>/kb/`; chunking based on `max_chunk_size`; plan files at `backend/knowledgebase/<agent_id>/<plan>.md` with 4k limit and safe names. Strict agent isolation. Structured logs added for add/update/get/list/search and plan ops.
-- Streaming UX: buffer until `agent_stream_start` reveals action; prevent initial “{” flicker; de-duplicate final messages.
+- Streaming UX: buffer until `agent_stream_start` reveals action; prevent initial "{ flicker; de-duplicate final messages.
 - Frontend caching: `ConnectionManager` caches session/messages/context per agent; AgentChat restores on navigation without resetting.
 - Chat autoscroll: scrolls only when the user is already at bottom (or on the very first system prompt load); does not jump when scrolled up; clears view on agent switch to avoid mixed prompts.
 - Mandatory prompt/tools: `all_agents.md` enforced as first system prompt and KB/Plan tools mandatory; UI shows them pre-selected and disabled; backend re-validates.
