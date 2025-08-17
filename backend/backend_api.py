@@ -63,90 +63,134 @@ class BackendAPI:
                 session_id = message.get("session_id")
                 data_payload = message.get("data", {})
                 
-                # Only log user chat messages at INFO level
-                if message_type == "chat_message":
-                    logger.debug(f"📥 User -> {agent_id} [{session_id}]: {data_payload.get('content', '')}")
-                else:
-                    logger.debug(f"Received message: {message_type} from {connection_id}")
-                
-                if message_type == "chat_message":
-                    await self.handle_chat_message(
-                        agent_id,
-                        session_id,
-                        data_payload.get("content", "")
-                    )
-                elif message_type == "agent_refresh":
-                    await self.handle_agent_refresh(
-                        agent_id,
-                        session_id
-                    )
-                elif message_type == "session_management":
-                    await self.handle_session_management(
-                        session_id,
-                        data_payload.get("action", "")
-                    )
-                elif message_type == "subscribe":
-                    await self.handle_subscribe(
-                        connection_id,
-                        agent_id,
-                        session_id,
-                    )
-                elif message_type == "unsubscribe":
-                    await self.handle_unsubscribe(
-                        connection_id,
-                        agent_id,
-                        session_id,
-                    )
-                elif message_type == "get_agents":
-                    logger.debug("🔄 [Backend] Routing get_agents to handle_get_agents")
-                    await self.handle_get_agents()
-                elif message_type == "register_agent":
-                    # Backward-compat: treat as subscribe without session (fail-fast if missing)
-                    if not session_id:
-                        raise ValueError("register_agent requires session_id; use subscribe instead")
-                    await self.handle_subscribe(connection_id, agent_id, session_id)
-                elif message_type == "create_agent":
-                    await self.handle_create_agent(data_payload)
-                elif message_type == "update_agent":
-                    await self.handle_update_agent(agent_id, data_payload)
-                elif message_type == "delete_agent":
-                    await self.handle_delete_agent(agent_id)
-                elif message_type == "get_tools":
-                    await self.handle_get_tools()
-                elif message_type == "get_prompts":
-                    await self.handle_get_prompts()
-                elif message_type == "get_providers":
-                    await self.handle_get_providers()
-                elif message_type == "get_models":
-                    await self.handle_get_models()
-                elif message_type == "update_model":
-                    await self.handle_update_model(data_payload)
-                elif message_type == "get_schemas":
-                    await self.handle_get_schemas()
-                elif message_type == "save_conversation":
-                    await self.handle_save_conversation(agent_id, session_id)
-                elif message_type == "list_conversations":
-                    await self.handle_list_conversations(agent_id, session_id)
-                elif message_type == "load_conversation":
-                    await self.handle_load_conversation(agent_id, data_payload.get("session_id"))
-                elif message_type == "get_embedding_models":
-                    await self.handle_get_embedding_models()
-                elif message_type == "get_embedding_settings":
-                    await self.handle_get_embedding_settings()
-                elif message_type == "update_embedding_settings":
-                    await self.handle_update_embedding_settings(data_payload)
-                elif message_type == "summarize_request":
-                    await self.handle_summarize_request(agent_id, session_id, data_payload)
-                else:
-                    raise ValueError(f"Unknown message type from frontend: {message_type}")
+                # Handle each message type with error catching
+                try:
+                    if message_type == "chat_message":
+                        await self.handle_chat_message(
+                            agent_id,
+                            session_id,
+                            data_payload.get("content", "")
+                        )
+                    elif message_type == "agent_refresh":
+                        await self.handle_agent_refresh(
+                            agent_id,
+                            session_id
+                        )
+                    elif message_type == "session_management":
+                        await self.handle_session_management(
+                            session_id,
+                            data_payload.get("action", "")
+                        )
+                    elif message_type == "subscribe":
+                        await self.handle_subscribe(
+                            connection_id,
+                            agent_id,
+                            session_id,
+                        )
+                    elif message_type == "unsubscribe":
+                        await self.handle_unsubscribe(
+                            connection_id,
+                            agent_id,
+                            session_id,
+                        )
+                    elif message_type == "get_agents":
+                        logger.debug("🔄 [Backend] Routing get_agents to handle_get_agents")
+                        await self.handle_get_agents()
+                    elif message_type == "register_agent":
+                        # Backward-compat: treat as subscribe without session (fail-fast if missing)
+                        if not session_id:
+                            raise ValueError("register_agent requires session_id; use subscribe instead")
+                        await self.handle_subscribe(connection_id, agent_id, session_id)
+                    elif message_type == "create_agent":
+                        await self.handle_create_agent(data_payload)
+                    elif message_type == "update_agent":
+                        await self.handle_update_agent(agent_id, data_payload)
+                    elif message_type == "delete_agent":
+                        await self.handle_delete_agent(agent_id)
+                    elif message_type == "get_tools":
+                        await self.handle_get_tools()
+                    elif message_type == "get_prompts":
+                        await self.handle_get_prompts()
+                    elif message_type == "get_providers":
+                        await self.handle_get_providers()
+                    elif message_type == "get_models":
+                        await self.handle_get_models()
+                    elif message_type == "update_model":
+                        await self.handle_update_model(data_payload)
+                    elif message_type == "get_schemas":
+                        await self.handle_get_schemas()
+                    elif message_type == "save_conversation":
+                        await self.handle_save_conversation(agent_id, session_id)
+                    elif message_type == "list_conversations":
+                        await self.handle_list_conversations(agent_id, session_id)
+                    elif message_type == "load_conversation":
+                        await self.handle_load_conversation(agent_id, data_payload.get("session_id"))
+                    elif message_type == "get_embedding_models":
+                        await self.handle_get_embedding_models()
+                    elif message_type == "get_embedding_settings":
+                        await self.handle_get_embedding_settings()
+                    elif message_type == "update_embedding_settings":
+                        await self.handle_update_embedding_settings(data_payload)
+                    elif message_type == "summarize_request":
+                        await self.handle_summarize_request(agent_id, session_id, data_payload)
+                    elif message_type == "update_provider":
+                        await self.handle_update_provider(data_payload)
+                    elif message_type == "create_schema":
+                        await self.handle_create_schema(data_payload)
+                    elif message_type == "update_schema":
+                        await self.handle_update_schema(data_payload)
+                    elif message_type == "delete_schema":
+                        await self.handle_delete_schema(data_payload)
+                    elif message_type == "update_prompt":
+                        await self.handle_update_prompt(data_payload)
+                    elif message_type == "create_prompt":
+                        await self.handle_create_prompt(data_payload)
+                    elif message_type == "delete_prompt":
+                        await self.handle_delete_prompt(data_payload)
+                    elif message_type == "get_monitoring_health":
+                        await self.handle_get_monitoring_health()
+                    elif message_type == "get_monitoring_metrics":
+                        await self.handle_get_monitoring_metrics()
+                    elif message_type == "get_monitoring_errors":
+                        await self.handle_get_monitoring_errors()
+                    else:
+                        raise ValueError(f"Unknown message type from frontend: {message_type}")
+                        
+                except Exception as handler_error:
+                    # Log the error for debugging
+                    logger.error(f"❌ [Backend] Error in {message_type} handler: {handler_error}")
+                    import traceback
+                    logger.error(f"❌ [Backend] Traceback: {traceback.format_exc()}")
+                    
+                    # Send error response back to frontend instead of crashing
+                    error_response = {
+                        "type": "error_response",
+                        "message_id": message_id,
+                        "timestamp": datetime.now().isoformat(),
+                        "data": {
+                            "original_message_type": message_type,
+                            "error": str(handler_error),
+                            "error_type": type(handler_error).__name__,
+                            "details": traceback.format_exc()
+                        }
+                    }
+                    
+                    try:
+                        await websocket.send_text(json.dumps(error_response))
+                    except Exception as send_error:
+                        logger.error(f"❌ [Backend] Failed to send error response: {send_error}")
+                        # If we can't send the error response, then we have a serious connection issue
+                        raise
+                    
+                    # Continue processing other messages - don't break the WebSocket connection
                     
         except WebSocketDisconnect:
             self.disconnect(connection_id)
         except Exception as e:
-            logger.error(f"❌ [Backend] Error handling message from {connection_id}: {e}")
+            logger.error(f"❌ [Backend] Critical error in message loop from {connection_id}: {e}")
             import traceback
             logger.error(f"❌ [Backend] Traceback: {traceback.format_exc()}")
-            # FAIL-FAST: Re-raise the exception instead of fallback
+            # Only disconnect on critical errors (connection issues, etc.)
             self.disconnect(connection_id)
             raise
     
@@ -177,11 +221,8 @@ class BackendAPI:
             logger.info(f"session_created -> {agent_id}: {new_session_id}")
             logger.debug(f"Retrieved agent instance for {agent_id}")
             
-            # Send session created message with the new session ID (broadcast) and hydrate
-            from schemas import SessionRef
-            ref = SessionRef(agent_id=agent_id, session_id=new_session_id, agent_name=agent.config.name)
-            await frontend_api().send_session_created(ref)
-            await frontend_api().send_to_agent(ref).system_prompt(agent.full_system_prompt)
+            # Ensure frontend is properly initialized with the new agent instance
+            await agent.ensure_frontend_initialized()
                 
             logger.debug(f"Agent refresh completed successfully for {agent_id}")
                 
@@ -205,13 +246,14 @@ class BackendAPI:
                 logger.warning(f"Unknown session action: {action}")
         except Exception as e:
             logger.error(f"Error in session management: {e}")
+            raise
     
-    async def handle_subscribe(self, connection_id: str, agent_id: str, session_id: str):
+    async def handle_subscribe(self, connection_id: str, agent_id: str, session_id: str) -> None:
         """Subscribe a connection to (agent_id, session_id)"""
         frontend_api().subscribe(connection_id, agent_id, session_id)
         logger.debug(f"Connection {connection_id} subscribed to {agent_id}[{session_id}]")
 
-    async def handle_unsubscribe(self, connection_id: str, agent_id: str, session_id: str):
+    async def handle_unsubscribe(self, connection_id: str, agent_id: str, session_id: str) -> None:
         frontend_api().unsubscribe(connection_id, agent_id, session_id)
         logger.debug(f"Connection {connection_id} unsubscribed from {agent_id}[{session_id}]")
 
@@ -429,10 +471,10 @@ class BackendAPI:
             # After loading, send a conversation snapshot and a session switch
             # Send session_created to switch session on UI
             from schemas import SessionRef
-            await frontend_api().send_session_created(SessionRef(agent_id=agent_id, session_id=snapshot["session_id"], agent_name=agent_manager().get_agent_config(agent_id).name))
+            ref = SessionRef(agent_id=agent_id, session_id=snapshot["session_id"], agent_name=agent_manager().get_agent_config(agent_id).name)
+            await frontend_api().send_session_created(ref)
             # Send full snapshot
-            from schemas import SessionRef
-            await frontend_api().send_to_agent(SessionRef(agent_id=agent_id, session_id=snapshot["session_id"], agent_name=agent_manager().get_agent_config(agent_id).name)).conversation_snapshot(snapshot)
+            await frontend_api().send_to_agent(ref).conversation_snapshot(snapshot)
         except Exception as e:
             logger.error(f"Error loading conversation for {agent_id}/{session_id}: {e}")
             raise
@@ -440,14 +482,14 @@ class BackendAPI:
     # ===== Summarization =====
     async def handle_summarize_request(self, agent_id: str, session_id: str, data: Dict[str, Any]):
         try:
-            from objects_registry import agent_manager as _am, prompt_manager as _pm
+            from objects_registry import agent_manager, prompt_manager
             percent = data.get("percentage")
             if percent is None:
                 raise ValueError("percentage is required")
             if not isinstance(percent, (int, float)) or percent < 0 or percent > 100:
                 raise ValueError("percentage must be a number between 0 and 100")
 
-            agent = _am().get_agent_by_id_and_session(agent_id, session_id)
+            agent = agent_manager().get_agent_by_id_and_session(agent_id, session_id)
             # Count only non-system/non-seed conversation messages
             from schemas import MessageType
             convo_msgs = [m for m in agent.history.get_messages() if m.message_type != MessageType.SYSTEM]
@@ -465,10 +507,10 @@ class BackendAPI:
                 role = seed.role.capitalize()
                 temp_parts.append(f"{role}: {seed.content}")
             for m in convo_msgs[:N]:
-                prefix = "User" if m.message_type == MessageType.CHAT_RESPONSE else "Assistant"
+                prefix = "Assistant" if m.message_type == MessageType.CHAT_RESPONSE else "User"
                 temp_parts.append(f"{prefix}: {m.content}")
             # Append summarization instruction from prompt
-            summary_prompt = _pm().get_prompt_content("summary_request.md")
+            summary_prompt = prompt_manager().get_prompt_content("summary_request.md")
             if not summary_prompt:
                 raise RuntimeError("summary_request.md prompt not found")
             temp_context = "\n\n".join(temp_parts + [f"User: {summary_prompt}"])
@@ -524,4 +566,157 @@ class BackendAPI:
                 pass
         except Exception as e:
             logger.error(f"Error summarizing conversation for {agent_id}/{session_id}: {e}")
+            raise
+
+
+
+    async def handle_update_provider(self, data: Dict[str, Any]) -> None:
+        """Handle update provider request from frontend"""
+        try:
+            from objects_registry import provider_manager
+            provider_name = data.get("name")
+            if not provider_name:
+                raise ValueError("Provider name is required")
+            
+            provider_manager().update_provider(provider_name, data)
+            await frontend_api().send_notification("success", f"Provider {provider_name} updated")
+            # Send updated provider list back to frontend
+            await self.handle_get_providers()
+        except Exception as e:
+            logger.error(f"Error updating provider: {e}")
+            raise
+
+    async def handle_create_schema(self, data: Dict[str, Any]) -> None:
+        """Handle create schema request from frontend"""
+        try:
+            from objects_registry import schema_manager
+            schema_name = data.get("name")
+            schema_content = data.get("content")
+            if not schema_name or not schema_content:
+                raise ValueError("Schema name and content are required")
+            
+            schema_manager().create_schema(schema_name, schema_content)
+            await frontend_api().send_notification("success", f"Schema {schema_name} created")
+            # Send updated schema list back to frontend
+            await self.handle_get_schemas()
+        except Exception as e:
+            logger.error(f"Error creating schema: {e}")
+            raise
+
+    async def handle_update_schema(self, data: Dict[str, Any]) -> None:
+        """Handle update schema request from frontend"""
+        try:
+            from objects_registry import schema_manager
+            schema_name = data.get("name")
+            schema_content = data.get("content")
+            if not schema_name or not schema_content:
+                raise ValueError("Schema name and content are required")
+            
+            schema_manager().update_schema(schema_name, schema_content)
+            await frontend_api().send_notification("success", f"Schema {schema_name} updated")
+            # Send updated schema list back to frontend
+            await self.handle_get_schemas()
+        except Exception as e:
+            logger.error(f"Error updating schema: {e}")
+            raise
+
+    async def handle_delete_schema(self, data: Dict[str, Any]) -> None:
+        """Handle delete schema request from frontend"""
+        try:
+            from objects_registry import schema_manager
+            schema_name = data.get("name")
+            if not schema_name:
+                raise ValueError("Schema name is required")
+            
+            schema_manager().delete_schema(schema_name)
+            await frontend_api().send_notification("success", f"Schema {schema_name} deleted")
+            # Send updated schema list back to frontend
+            await self.handle_get_schemas()
+        except Exception as e:
+            logger.error(f"Error deleting schema: {e}")
+            raise
+
+    async def handle_update_prompt(self, data: Dict[str, Any]) -> None:
+        """Handle update prompt request from frontend"""
+        try:
+            from objects_registry import prompt_manager
+            prompt_name = data.get("name")
+            content = data.get("content")
+            if not prompt_name or not content:
+                raise ValueError("Prompt name and content are required")
+            
+            prompt_manager().update_prompt(prompt_name, content)
+            await frontend_api().send_notification("success", f"Prompt {prompt_name} updated")
+            # Send updated prompt list back to frontend
+            await self.handle_get_prompts()
+        except Exception as e:
+            logger.error(f"Error updating prompt: {e}")
+            raise
+
+    async def handle_create_prompt(self, data: Dict[str, Any]) -> None:
+        """Handle create prompt request from frontend"""
+        try:
+            from objects_registry import prompt_manager
+            from schemas import PromptType
+            name = data.get("name")
+            content = data.get("content")
+            prompt_type = PromptType(data.get("type", "system"))
+            if not name or not content:
+                raise ValueError("Prompt name and content are required")
+            
+            prompt_manager().create_prompt(name, content, prompt_type)
+            await frontend_api().send_notification("success", f"Prompt {name} created")
+            # Send updated prompt list back to frontend
+            await self.handle_get_prompts()
+        except Exception as e:
+            logger.error(f"Error creating prompt: {e}")
+            raise
+
+    async def handle_delete_prompt(self, data: Dict[str, Any]) -> None:
+        """Handle delete prompt request from frontend"""
+        try:
+            from objects_registry import prompt_manager
+            prompt_name = data.get("name")
+            if not prompt_name:
+                raise ValueError("Prompt name is required")
+            
+            prompt_manager().delete_prompt(prompt_name)
+            await frontend_api().send_notification("success", f"Prompt {prompt_name} deleted")
+            # Send updated prompt list back to frontend
+            await self.handle_get_prompts()
+        except Exception as e:
+            logger.error(f"Error deleting prompt: {e}")
+            raise
+
+    async def handle_get_monitoring_health(self) -> None:
+        """Handle get monitoring health request from frontend"""
+        try:
+            from monitoring import health_monitor
+            health_data = health_monitor.run_health_checks()
+            # For now, just send a notification - frontend can request data separately if needed
+            await frontend_api().send_notification("info", f"Health check completed - {len(health_data)} checks run")
+        except Exception as e:
+            logger.error(f"Error getting monitoring health: {e}")
+            raise
+
+    async def handle_get_monitoring_metrics(self) -> None:
+        """Handle get monitoring metrics request from frontend"""
+        try:
+            from monitoring import performance_monitor
+            metrics_data = performance_monitor.get_all_metrics()
+            # For now, just send a notification - frontend can request data separately if needed
+            await frontend_api().send_notification("info", f"Metrics retrieved - {len(metrics_data)} metrics available")
+        except Exception as e:
+            logger.error(f"Error getting monitoring metrics: {e}")
+            raise
+
+    async def handle_get_monitoring_errors(self) -> None:
+        """Handle get monitoring errors request from frontend"""
+        try:
+            from monitoring import error_tracker
+            error_data = error_tracker.get_error_summary()
+            # For now, just send a notification - frontend can request data separately if needed
+            await frontend_api().send_notification("info", f"Error summary retrieved - {error_data.get('total_errors', 0)} errors found")
+        except Exception as e:
+            logger.error(f"Error getting monitoring errors: {e}")
             raise

@@ -415,10 +415,6 @@ class Agent:
         else:
             # Unknown action. Build a structured error with allowed actions for clarity.
             raise RuntimeError(f'Unknown action field - although it was checked earlier.\nThere is an internal error.\nResponse: {response_data}')
-                
-
-
-
 
     # Agent-level task queue and worker
     async def _start_worker(self):
@@ -427,7 +423,6 @@ class Agent:
             self._task_queue = asyncio.Queue()
             self._worker_task = asyncio.create_task(self._process_tasks())
             logger.debug(f"Started worker for agent {self.id}")
-    
     
     async def _process_tasks(self):
         """Process tasks in order for this agent"""
@@ -730,13 +725,13 @@ class Agent:
                     if not text_piece:
                         continue
                     
-                    streamed_text_parts.append(text_piece)
-                    if not announced_action:
+                        streamed_text_parts.append(text_piece)
+                        if not announced_action:
                         import re
-                        buf = "".join(streamed_text_parts)
-                        m = re.search(r"\"action\"\s*:\s*\"([A-Z_]+)\"", buf)
-                        if m:
-                            announced_action = True
+                            buf = "".join(streamed_text_parts)
+                            m = re.search(r"\"action\"\s*:\s*\"([A-Z_]+)\"", buf)
+                            if m:
+                                announced_action = True
                             await frontend_api().send_to_agent(self.session_ref).stream_start(m.group(1))
                     
                     await frontend_api().send_to_agent(self.session_ref).stream(text_piece)

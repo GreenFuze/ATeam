@@ -85,8 +85,8 @@ class FrontendAPI:
         is_stream_delta = message.get("type") == "agent_stream"
         if connection_id not in self.active_connections:
             raise RuntimeError(f"Active connection not found: {connection_id}")
-        try:
-            websocket = self.active_connections[connection_id]
+            try:
+                websocket = self.active_connections[connection_id]
             # Enforce connected state; fail-fast if not
             if websocket.client_state.value != 1:  # WebSocketState.CONNECTED
                 self.disconnect(connection_id)
@@ -97,7 +97,7 @@ class FrontendAPI:
             self.disconnect(connection_id)
             raise
         except Exception:
-            self.disconnect(connection_id)
+                self.disconnect(connection_id)
             raise
     
     async def _send_to_agent_message(self, ref: 'SessionRef', message: Dict[str, Any]):
