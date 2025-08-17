@@ -7,8 +7,10 @@ import json
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+from fastapi.websockets import WebSocketState
 from pydantic import BaseModel, Field
 from fastapi import WebSocket, WebSocketDisconnect
+import websockets
 from schemas import Message, UILLMResponse, FrontendAPIEnvelope, StreamMessageData, StreamStartMessageData, ContextUpdateMessageData, ConversationListMessageData, UIAgentDelegateResponse, UIAgentCallResponse, UIToolCallResponse, ContextUsageData, MessageType, FrontendMessageType, MessageIcon, SessionRef
 
 # Lazy agent name resolver to avoid circular imports at module import time
@@ -80,37 +82,60 @@ class FrontendAPI:
             if not self.connection_index[connection_id]:
                 del self.connection_index[connection_id]
     
-    async def send_to_connection(self, connection_id: str, message: Dict[str, Any]):
-        """Send a message to a specific connection (fail-fast)."""
-        is_stream_delta = message.get("type") == "agent_stream"
+    async def send_to_connection(self, connection_id: str, message: Dict[str, Any]) -> bool:
+        """Send a message to a specific connection. Returns True if successful, False if connection failed."""
         if connection_id not in self.active_connections:
-            raise RuntimeError(f"Active connection not found: {connection_id}")
-            try:
-                websocket = self.active_connections[connection_id]
-            # Enforce connected state; fail-fast if not
-            if websocket.client_state.value != 1:  # WebSocketState.CONNECTED
+            logger.debug(f"Connection {connection_id} not found in active connections")
+            return False
+        
+        try:
+            websocket = self.active_connections[connection_id]
+            
+            # Enforce connected state; gracefully handle disconnections
+            if websocket.client_state != WebSocketState.CONNECTED:
+                logger.debug(f"Connection {connection_id} is not connected, removing it")
                 self.disconnect(connection_id)
-                raise RuntimeError(f"WebSocket not connected for connection {connection_id}")
+                return False
+            
             message_str = json.dumps(message)
             await websocket.send_text(message_str)
+            return True
+            
         except WebSocketDisconnect:
+            logger.debug(f"WebSocket disconnected for {connection_id}, removing it")
             self.disconnect(connection_id)
-            raise
-        except Exception:
-                self.disconnect(connection_id)
-            raise
+            return False
+        except Exception as e:
+            logger.error(f"Failed to send message to connection {connection_id}: {e}")
+            self.disconnect(connection_id)
+            return False
     
     async def _send_to_agent_message(self, ref: 'SessionRef', message: Dict[str, Any]):
         """Prefer targeted delivery to subscribed connections; fallback to broadcast if none."""
         key = (ref.agent_id, ref.session_id)
         connection_ids = self.subscriptions.get(key)
         if connection_ids:
+            # Send to all subscribed connections, gracefully handle failures
             for connection_id in list(connection_ids):
-                await self.send_to_connection(connection_id, message)
+                success = await self.send_to_connection(connection_id, message)
+                if not success:
+                    # Connection failed, it's already been removed from subscriptions
+                    # Continue with other connections
+                    continue
             return
         # Fallback: broadcast to all connections (initial hydration race-safe)
-        for connection_id in list(self.active_connections.keys()):
-            await self.send_to_connection(connection_id, message)
+        await self._send_to_non_agent_message(message)
+
+    async def _send_to_non_agent_message(self, message: Dict[str, Any]):
+        """Send message to all active connections (non-agent-specific messages)."""
+        # Create a copy of the keys to avoid modification during iteration
+        connection_ids = list(self.active_connections.keys())
+        for connection_id in connection_ids:
+            success = await self.send_to_connection(connection_id, message)
+            if not success:
+                # Connection failed, it's already been removed from active_connections
+                # Continue with other connections
+                continue
 
     # ---------- Outbound typed envelopes ----------
     class _BaseOutbound(BaseModel):
@@ -125,12 +150,6 @@ class FrontendAPI:
         role: str
         content: str
 
-    class _SystemPromptMessage(_BaseOutbound):
-        content: str
-
-    class _SeedPromptsMessage(_BaseOutbound):
-        prompts: List['FrontendAPI._SeedPromptItem']
-
 
 
     # ---------- Facades ----------
@@ -140,25 +159,32 @@ class FrontendAPI:
             self._session = ref
 
         async def system_prompt(self, content: str) -> None:
-            msg = FrontendAPI._SystemPromptMessage(
-                type=MessageType.SYSTEM,
+            # Create system message data
+            system_data = {"content": content}
+            
+            # Create envelope with system message data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.SYSTEM_MESSAGE,
                 agent_id=self._session.agent_id,
                 agent_name=self._session.agent_name,
                 session_id=self._session.session_id,
-                content=content,
+                data=system_data
             )
-            await self._api._send_to_agent_message(self._session, msg.model_dump())
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def seed_prompts(self, prompts: List[Dict[str, str]]) -> None:
-            items = [FrontendAPI._SeedPromptItem(**p) for p in prompts]
-            msg = FrontendAPI._SeedPromptsMessage(
-                type=MessageType.SEED_MESSAGE,
+            # Create seed message data
+            seed_data = {"prompts": prompts}
+            
+            # Create envelope with seed message data
+            envelope = FrontendAPIEnvelope(
+                type=FrontendMessageType.SEED_MESSAGE,
                 agent_id=self._session.agent_id,
                 agent_name=self._session.agent_name,
                 session_id=self._session.session_id,
-                prompts=items,
+                data=seed_data
             )
-            await self._api._send_to_agent_message(self._session, msg.model_dump())
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def send_agent_response_to_frontend(self, response: UILLMResponse, context_usage: ContextUsageData) -> None:
             if response.is_sent:
@@ -338,8 +364,7 @@ class FrontendAPI:
                 }
             )
             # Broadcast seed messages for initial UI hydration
-            for connection_id in list(self.active_connections.keys()):
-                await self.send_to_connection(connection_id, envelope.model_dump())
+            await self._send_to_non_agent_message(envelope.model_dump())
     
     
     async def send_notification(self, notification_type: str, message: str):
@@ -355,10 +380,7 @@ class FrontendAPI:
                 "message": message
             }
         )
-        # Create a copy of the keys to avoid modification during iteration
-        connection_ids = list(self.active_connections.keys())
-        for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, envelope.model_dump())
+        await self._send_to_non_agent_message(envelope.model_dump())
 
     async def send_agent_list_update(self, data: Dict[str, Any]):
         """Send agent list update to all frontend connections"""
@@ -371,10 +393,7 @@ class FrontendAPI:
             data=data
         )
         
-        # Create a copy of the keys to avoid modification during iteration
-        connection_ids = list(self.active_connections.keys())
-        for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, envelope.model_dump())
+        await self._send_to_non_agent_message(envelope.model_dump())
         
 
     async def send_tool_update(self, data: Dict[str, Any]):
@@ -387,10 +406,7 @@ class FrontendAPI:
             session_id="",  # Global update
             data=data
         )
-        # Create a copy of the keys to avoid modification during iteration
-        connection_ids = list(self.active_connections.keys())
-        for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, envelope.model_dump())
+        await self._send_to_non_agent_message(envelope.model_dump())
 
     async def send_prompt_update(self, data: Dict[str, Any]):
         """Send prompt update to all frontend connections"""
@@ -402,10 +418,7 @@ class FrontendAPI:
             session_id="",  # Global update
             data=data
         )
-        # Create a copy of the keys to avoid modification during iteration
-        connection_ids = list(self.active_connections.keys())
-        for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, envelope.model_dump())
+        await self._send_to_non_agent_message(envelope.model_dump())
 
     async def send_provider_update(self, data: Dict[str, Any]):
         """Send provider update to all frontend connections"""
@@ -417,10 +430,7 @@ class FrontendAPI:
             session_id="",  # Global update
             data=data
         )
-        # Create a copy of the keys to avoid modification during iteration
-        connection_ids = list(self.active_connections.keys())
-        for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, envelope.model_dump())
+        await self._send_to_non_agent_message(envelope.model_dump())
 
     async def send_model_update(self, data: Dict[str, Any]):
         """Send model update to all frontend connections"""
@@ -432,10 +442,7 @@ class FrontendAPI:
             session_id="",  # Global update
             data=data
         )
-        # Create a copy of the keys to avoid modification during iteration
-        connection_ids = list(self.active_connections.keys())
-        for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, envelope.model_dump())
+        await self._send_to_non_agent_message(envelope.model_dump())
 
     async def send_schema_update(self, data: Dict[str, Any]):
         """Send schema update to all frontend connections"""
@@ -447,10 +454,7 @@ class FrontendAPI:
             session_id="",  # Global update
             data=data
         )
-        # Create a copy of the keys to avoid modification during iteration
-        connection_ids = list(self.active_connections.keys())
-        for connection_id in connection_ids:
-            await self.send_to_connection(connection_id, envelope.model_dump())
+        await self._send_to_non_agent_message(envelope.model_dump())
 
     async def send_session_created(self, ref: SessionRef):
         """Send session created message to frontend"""

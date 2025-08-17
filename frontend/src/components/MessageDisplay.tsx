@@ -8,7 +8,8 @@ import {
   IconDotsVertical, IconFileText, IconMarkdown,
   IconQuestionMark, IconSettings, IconEdit,
   IconCode, IconTools, IconArrowsRightLeft,
-  IconUsers, IconArrowUpRight, IconAlertTriangle
+  IconUsers, IconArrowUpRight, IconAlertTriangle,
+  IconChevronDown, IconChevronRight
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { Message, MessageType } from '../types';
@@ -19,6 +20,8 @@ interface MessageDisplayProps {
   editable?: boolean;
   defaultDisplayMode?: 'markdown' | 'text' | 'raw';
   defaultEditMode?: boolean;
+  isCollapsible?: boolean;
+  isCollapsed?: boolean;
   onSave?: (content: string) => void;
   onCancel?: () => void;
 }
@@ -31,6 +34,8 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
   editable = false, 
   defaultDisplayMode = 'markdown',
   defaultEditMode = false,
+  isCollapsible = false,
+  isCollapsed = false,
   onSave,
   onCancel 
 }) => {
@@ -39,6 +44,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
   const [editContent, setEditContent] = useState(message.content);
   const [isEditing, setIsEditing] = useState(editable && defaultEditMode);
   const [showReasoning, setShowReasoning] = useState(false);
+  const [collapsed, setCollapsed] = useState(isCollapsible && isCollapsed);
 
   // Update editContent when message content changes
   useEffect(() => {
@@ -325,6 +331,18 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
       <Group justify="space-between" align="flex-start" mb="sm" wrap="nowrap" style={{ alignItems: 'flex-start' }}>
         <Group gap="sm">
           <Group gap="xs">
+            {/* Collapse/Expand button for collapsible messages */}
+            {isCollapsible && (
+              <ActionIcon
+                size="sm"
+                variant="subtle"
+                onClick={() => setCollapsed(!collapsed)}
+                style={{ color: 'var(--mantine-color-white)' }}
+              >
+                {collapsed ? <IconChevronRight size={16} /> : <IconChevronDown size={16} />}
+              </ActionIcon>
+            )}
+            
             <Tooltip label={isUserMessage ? 'User response' : getMessageIconTooltip(message.message_type)}>
               <Box c={getMessageColor(message.message_type)}>
                 {isUserMessage ? (
@@ -454,10 +472,12 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({
         </Box>
       </Group>
 
-      <Box>
-        {renderMessageContent()}
-        {renderMetadata()}
-      </Box>
+      {!collapsed && (
+        <Box>
+          {renderMessageContent()}
+          {renderMetadata()}
+        </Box>
+      )}
     </Paper>
   );
 };

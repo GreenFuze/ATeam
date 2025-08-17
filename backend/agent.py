@@ -9,6 +9,7 @@ import logging
 import uuid
 import threading
 import asyncio
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union, Callable
 from pathlib import Path
@@ -725,13 +726,12 @@ class Agent:
                     if not text_piece:
                         continue
                     
-                        streamed_text_parts.append(text_piece)
-                        if not announced_action:
-                        import re
-                            buf = "".join(streamed_text_parts)
-                            m = re.search(r"\"action\"\s*:\s*\"([A-Z_]+)\"", buf)
-                            if m:
-                                announced_action = True
+                    streamed_text_parts.append(text_piece)
+                    if not announced_action:
+                        buf = "".join(streamed_text_parts)
+                        m = re.search(r"\"action\"\s*:\s*\"([A-Z_]+)\"", buf)
+                        if m:
+                            announced_action = True
                             await frontend_api().send_to_agent(self.session_ref).stream_start(m.group(1))
                     
                     await frontend_api().send_to_agent(self.session_ref).stream(text_piece)

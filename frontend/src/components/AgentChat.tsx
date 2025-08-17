@@ -776,6 +776,8 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
                   key={message.id}
                   message={message}
                   agentName={agentInfo?.name}
+                  isCollapsible={message.message_type === 'SYSTEM'}
+                  isCollapsed={message.message_type === 'SYSTEM'}
                 />
               ))
             )}
