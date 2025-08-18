@@ -156,6 +156,16 @@ class ToolManager:
         # Re-discover tools to ensure we have the latest data
         self.tools = {}
         self.discover_tools()
-        return tool_name in self.tools
+        
+        # Check if tool_name is in tools (simple name)
+        if tool_name in self.tools:
+            return True
+            
+        # Check if tool_name is in module.function format
+        if '.' in tool_name:
+            module_name, function_name = tool_name.split('.', 1)
+            return function_name in self.tools
+            
+        return False
     
  

@@ -22,7 +22,7 @@ from schemas import (
     AgentConfig, Message, MessageType, MessageIcon, UILLMResponse, 
     ConversationData, SeedMessage,
     StructuredResponseType, ChatResponse, ToolCallResponse, ToolReturnResponse,
-    AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, RefinementResponse,
+    AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, AgentOrchestrationFailedResponse, RefinementResponse,
     UnknownActionError, SessionRef, MessageHistory, PromptType, OperationType,
 )
 from notification_utils import log_error, log_warning, log_info
@@ -56,7 +56,6 @@ class Agent:
         # Agent-level task queue for sequential processing
         self._task_queue = None  # Will be initialized when first task is scheduled
         self._worker_task = None  # Worker coroutine for processing tasks
-        self._llm_lock = asyncio.Lock()  # Lock for send_to_llm to prevent race conditions
         
         # Initialize tool runner
         self._tool_runner = ToolRunner(self)
@@ -133,40 +132,47 @@ class Agent:
         Note: This method does not return anything - all communication is done via UI messages.
         For agent orchestration, the called agent should emit AGENT_RETURN when truly complete.
         """
-        async with self._llm_lock:  # Prevent race conditions
-            if not self.model:
-                raise RuntimeError(f"Could not initialize model for agent '{self.config.name}'")
-            
-            # Add user message to conversation history
-            self.history.append_user_message(message)
-            
-            # Build complete conversation context
-            context = self._build_conversation_context(message)
-            
-            # Response format instructions are already included in system prompt during agent initialization
-            
-            # Get response from LLM (stream if supported)
-            response_text = await self._prompt_and_stream(context)
-            logger.info(f"🔍 DEBUG: Raw LLM response: {response_text}")
-            
-            # Parse structured response from LLM
-            try:
-                structured_response = self._parse_llm_response(response_text)
-            except UnknownActionError as e:
-                logger.error(f"❌ DEBUG: Illegal action from LLM. Error: {e}\nResponse text was:\n{response_text}")
+        logger.info(f"🔍 DEBUG: send_to_llm called for agent {self.id} with message: {message[:100]}...")
+        
+        if not self.model:
+            raise RuntimeError(f"Could not initialize model for agent '{self.config.name}'")
+        
+        # Add user message to conversation history
+        self.history.append_user_message(message)
+        logger.info(f"🔍 DEBUG: Added user message to history for agent {self.id}")
+        
+        # Build complete conversation context
+        context = self._build_conversation_context(message)
+        logger.info(f"🔍 DEBUG: Built conversation context for agent {self.id}")
+        
+        # Response format instructions are already included in system prompt during agent initialization
+        
+        # Get response from LLM (stream if supported)
+        logger.info(f"🔍 DEBUG: Calling _prompt_and_stream for agent {self.id}")
+        response_text = await self._prompt_and_stream(context)
+        logger.info(f"🔍 INFO: Raw LLM response for agent {self.id}: {response_text}")
+        
+        # Parse structured response from LLM
+        try:
+            structured_response = self._parse_llm_response(response_text)
+            logger.info(f"🔍 DEBUG: Parsed structured response for agent {self.id}: {type(structured_response)}")
+        except UnknownActionError as e:
+            logger.error(f"❌ DEBUG: Illegal action from LLM. Error: {e}\nResponse text was:\n{response_text}")
 
-                # Build explicit illegal-action error message
-                from schemas import ErrorChatResponse
-                structured_response = ErrorChatResponse(e, self)
-            except ValueError as e:
-                logger.error(f"❌ DEBUG: Failed to parse LLM response. Error: {e}\nResponse text was:\n{response_text}")
+            # Build explicit illegal-action error message
+            from schemas import ErrorChatResponse
+            structured_response = ErrorChatResponse.create(e, self)
+        except ValueError as e:
+            logger.error(f"❌ DEBUG: Failed to parse LLM response. Error: {e}\nResponse text was:\n{response_text}")
 
-                # If parsing fails, respond with an ERROR-flavored ChatResponse
-                from schemas import ErrorChatResponse
-                structured_response = ErrorChatResponse(e, self)
-            
-            # Handle the LLM response - each handler manages its own UI communication and history
-            await self._handle_structured_response(structured_response)
+            # If parsing fails, respond with an ERROR-flavored ChatResponse
+            from schemas import ErrorChatResponse
+            structured_response = ErrorChatResponse.create(e, self)
+        
+        # Handle the LLM response - each handler manages its own UI communication and history
+        logger.info(f"🔍 DEBUG: Calling _handle_structured_response for agent {self.id}")
+        await self._handle_structured_response(structured_response)
+        logger.info(f"🔍 DEBUG: Completed _handle_structured_response for agent {self.id}")
     
     
     def get_conversation_history(self) -> List[Message]:
@@ -387,10 +393,19 @@ class Agent:
         ):
             # Do not require explicit action for ChatResponse
             response_data.pop("action", None)
-            return ChatResponse(**response_data)
+            return ChatResponse.create(
+                content=response_data['content'],
+                reasoning=response_data['reasoning'],
+                agent=self
+            )
         
         elif action_enum == MessageType.TOOL_CALL:
-            return ToolCallResponse(**response_data)
+            return ToolCallResponse.create(
+                tool=response_data['tool'],
+                args=response_data['args'],
+                reasoning=response_data['reasoning'],
+                agent=self
+            )
         
         elif action_enum == MessageType.TOOL_RETURN:
             if 'success' not in response_data:
@@ -398,20 +413,56 @@ class Agent:
             # Convert string success to boolean for ToolReturnResponse constructor
             success_str = response_data['success']
             success_bool = success_str.lower() == "true" if isinstance(success_str, str) else bool(success_str)
-            response_data['success'] = success_bool
-            return ToolReturnResponse(**response_data)
+            return ToolReturnResponse.create(
+                tool=response_data['tool'],
+                result=response_data['result'],
+                success=success_bool,
+                reasoning=response_data['reasoning'],
+                agent=self
+            )
         
         elif action_enum == MessageType.AGENT_DELEGATE:
-            return AgentDelegateResponse(**response_data)
+            return AgentDelegateResponse.create(
+                agent=response_data['agent'],
+                caller_agent=response_data['caller_agent'],
+                user_input=response_data['user_input'],
+                reasoning=response_data['reasoning']
+            )
         
         elif action_enum == MessageType.AGENT_CALL:
-            return AgentCallResponse(**response_data)
+            return AgentCallResponse.create(
+                agent=response_data['agent'],
+                caller_agent=response_data['caller_agent'],
+                user_input=response_data['user_input'],
+                reasoning=response_data['reasoning']
+            )
         
         elif action_enum == MessageType.AGENT_RETURN:
-            return AgentReturnResponse(**response_data)
+            return AgentReturnResponse.create(
+                agent=response_data['agent'],
+                returning_agent=response_data['returning_agent'],
+                success=response_data['success'] == 'True',
+                reasoning=response_data['reasoning']
+            )
+        
+        elif action_enum == MessageType.AGENT_ORCHESTRATION_FAILED:
+            return AgentOrchestrationFailedResponse.create(
+                operation_type=response_data['operation_type'],
+                target_agent_id=response_data['target_agent_id'],
+                caller_agent_id=response_data['caller_agent_id'],
+                error_reason=response_data['error_reason'],
+                reasoning=response_data['reasoning']
+            )
         
         elif action_enum == MessageType.REFINEMENT_RESPONSE:
-            return RefinementResponse(**response_data)
+            return RefinementResponse(
+                new_plan=response_data['new_plan'],
+                done=response_data['done'],
+                score=response_data['score'],
+                why=response_data['why'],
+                checklist=response_data['checklist'],
+                success=response_data['success']
+            )
         
         else:
             # Unknown action. Build a structured error with allowed actions for clarity.
@@ -421,7 +472,9 @@ class Agent:
     async def _start_worker(self):
         """Start the agent's task worker if not already running"""
         if self._worker_task is None:
-            self._task_queue = asyncio.Queue()
+            # Ensure task queue is initialized
+            if self._task_queue is None:
+                self._task_queue = asyncio.Queue()
             self._worker_task = asyncio.create_task(self._process_tasks())
             logger.debug(f"Started worker for agent {self.id}")
     
@@ -444,12 +497,13 @@ class Agent:
     # Background scheduler
     def _schedule(self, coro):
         """Schedule a task for this agent's queue"""
+        # Initialize task queue if needed
+        if self._task_queue is None:
+            self._task_queue = asyncio.Queue()
         # Initialize worker if needed
         if self._worker_task is None:
             asyncio.create_task(self._start_worker())
-        # Add task to queue - fail-fast if queue not ready
-        if self._task_queue is None:
-            raise RuntimeError(f"Agent {self.id} task queue not initialized - this indicates a bug in agent initialization")
+        # Add task to queue
         self._task_queue.put_nowait(coro)
     
     async def _handle_structured_response(self, structured_response: StructuredResponseType) -> None:
@@ -465,6 +519,8 @@ class Agent:
             await self._handle_agent_call(structured_response)
         elif isinstance(structured_response, AgentReturnResponse):
             await self._handle_agent_return(structured_response)
+        elif isinstance(structured_response, AgentOrchestrationFailedResponse):
+            await self._handle_agent_orchestration_failed(structured_response)
         elif isinstance(structured_response, RefinementResponse):
             await self._handle_refinement_response(structured_response)
         else:
@@ -472,14 +528,7 @@ class Agent:
     
     async def _handle_chat_response(self, response: ChatResponse) -> None:
         """Handle chat response - supports WAIT_USER_INPUT and CONTINUE_WORK variants"""
-        # Map extended chat actions to message types; default to CHAT_RESPONSE
-        message_type = MessageType.CHAT_RESPONSE
-        if response.action == MessageType.CHAT_RESPONSE_WAIT_USER_INPUT.value:
-            message_type = MessageType.CHAT_RESPONSE
-        elif response.action == MessageType.CHAT_RESPONSE_CONTINUE_WORK.value:
-            message_type = MessageType.CHAT_RESPONSE
-
-        # Handle UI communication and history management
+         # Handle UI communication and history management
         await self._send_llm_response_to_ui(response.to_ui())
     
 
@@ -491,14 +540,15 @@ class Agent:
         # Validate tool exists
         if not tool_manager().is_tool_available(response.tool):
             error_msg = LLMAutoReplyPrompts.TOOL_NOT_FOUND.format(tool_name=response.tool)
-            await self._send_llm_response_to_ui(
-                AgentReturnResponse(
-                    return_to_agent=self,
-                    returning_agent=self,
-                    is_success=False,
-                    reasoning=error_msg
-                ).to_ui()
+            # Create tool return response for the failed tool call
+            tool_return_response = ToolReturnResponse.create(
+                tool=response.tool,
+                result=error_msg,
+                success=False,
+                reasoning=f"Tool {response.tool} not found or not available",
+                agent=self
             )
+            await self._send_llm_response_to_ui(tool_return_response.to_ui())
             # Schedule error feedback to LLM for recovery
             self._schedule(self.send_to_llm(f"Error: {error_msg}. {LLMAutoReplyPrompts.RECOVERY_INSTRUCTION}"))
             return
@@ -519,7 +569,7 @@ class Agent:
         tool_result = self._tool_runner.run_tool(response.tool, args_with_caller)
 
         # Create proper tool return response and add to conversation
-        tool_return_response = ToolReturnResponse(
+        tool_return_response = ToolReturnResponse.create(
             tool=response.tool,
             result=tool_result.result,
             success=True,
@@ -528,6 +578,9 @@ class Agent:
         )
         tool_ui_response = tool_return_response.to_ui()
         self.history.append_llm_response(tool_ui_response)
+
+        # Log TOOL_RETURN for consistency
+        logger.info(f"🔍 INFO: Raw LLM response for agent {self.id}: {json.dumps(tool_ui_response.dict(), indent=2)}")
 
         # Emit TOOL_RETURN to frontend as a separate message (fail-fast)
         context_usage = self._calculate_context_usage()
@@ -544,6 +597,9 @@ class Agent:
         """Helper method to append LLM response to history and send to UI"""
         self.history.append_llm_response(llm_response)
         
+        # Debug: Log what we're sending
+        logger.info(f"🔍 DEBUG: Sending to UI - type: {llm_response.message_type}, action: {llm_response.action}, is_sent: {llm_response.is_sent}")
+        
         from objects_registry import frontend_api
         await frontend_api().send_to_agent(self.session_ref).send_agent_response_to_frontend(
             llm_response,
@@ -552,103 +608,106 @@ class Agent:
 
     async def _handle_agent_delegate(self, response: AgentDelegateResponse) -> None:
         """Handle agent delegation - delegate to another agent or fail if not found."""
-        from objects_registry import frontend_api
-        from llm_auto_reply_prompts import LLMAutoReplyPrompts
-        
-        await self._handle_agent_orchestration(
-            response=response,
-            operation_type=OperationType.DELEGATE,
-            empty_input_error=LLMAutoReplyPrompts.EMPTY_USER_INPUT_DELEGATE,
-            agent_not_found_error=LLMAutoReplyPrompts.AGENT_NOT_FOUND_DELEGATE,
-            self_operation_error=LLMAutoReplyPrompts.SELF_DELEGATION,
-            send_announcement=lambda target_instance: frontend_api().send_to_agents(
-                self.session_ref, target_instance.session_ref
-            ).delegation_announcement(response.reasoning)
-        )
-    
-    async def _handle_agent_call(self, response: AgentCallResponse) -> None:
-        """Handle agent call - verify agent exists, otherwise return failure."""
-        from objects_registry import frontend_api
-        from llm_auto_reply_prompts import LLMAutoReplyPrompts
-        
-        await self._handle_agent_orchestration(
-            response=response,
-            operation_type=OperationType.CALL,
-            empty_input_error=LLMAutoReplyPrompts.EMPTY_USER_INPUT_CALL,
-            agent_not_found_error=LLMAutoReplyPrompts.AGENT_NOT_FOUND_CALL,
-            self_operation_error=LLMAutoReplyPrompts.SELF_CALL,
-            send_announcement=lambda target_instance: frontend_api().send_to_agents(
-                self.session_ref, target_instance.session_ref
-            ).agent_call_announcement(f"Agent is waiting for {target_instance.name} to complete the task: {response.reasoning}")
-        )
-    
-    async def _handle_agent_orchestration(
-        self, 
-        response: Union[AgentDelegateResponse, AgentCallResponse],
-        operation_type: OperationType,
-        empty_input_error: str,
-        agent_not_found_error: str,
-        self_operation_error: str,
-        send_announcement: Callable
-    ) -> None:
-        """Common logic for agent delegation and calling operations."""
         from objects_registry import agent_manager, frontend_api
         from llm_auto_reply_prompts import LLMAutoReplyPrompts
 
         # Validate user_input (fail-fast)
         if not response.user_input:
-            await self._handle_orchestration_error(empty_input_error)
+            await self._handle_orchestration_error(LLMAutoReplyPrompts.EMPTY_USER_INPUT_DELEGATE, "delegate", response.agent_id)
             return
 
         try:
             target_cfg, is_self = self._resolve_target_agent(response.agent_id)
         except Exception as e:
-            await self._handle_orchestration_error(agent_not_found_error, str(e))
+            await self._handle_orchestration_error(LLMAutoReplyPrompts.AGENT_NOT_FOUND_DELEGATE, "delegate", response.agent_id, str(e))
             return
 
         if is_self:
-            await self._handle_orchestration_error(self_operation_error)
+            await self._handle_orchestration_error(LLMAutoReplyPrompts.SELF_DELEGATION, "delegate", response.agent_id)
             return
 
         # Get or create target agent instance
         target_instance = await agent_manager().get_random_agent_instance_by_id(target_cfg.id, is_create_if_none_exist=True)
         if not target_instance:
-            # This should not happen since we validated the agent exists above
             raise RuntimeError(f"Failed to get or create agent instance for {target_cfg.id}")
 
-        # Send operation-specific announcement
-        await send_announcement(target_instance)
+        # Send delegation response to delegating agent (self) - "Delegating to [target]"
+        response_ui = response.to_ui()
+        await self._send_llm_response_to_ui(response_ui)
+
+        # Send delegation notification to target agent - "Delegated by [caller]"
+        # Create a custom response for the target agent with different content
+        from schemas import UIAgentDelegateResponse
+        target_response_ui = UIAgentDelegateResponse(
+            agent_delegate=response,
+            model=target_instance.config.model,
+            agent_id=target_instance.id
+        )
+        # Override the content for the target agent
+        target_response_ui.content = f"Delegated by {self.id} agent"
+        await target_instance._send_llm_response_to_ui(target_response_ui)
 
         # Schedule the target agent's work
         target_instance._schedule(target_instance.send_to_llm(response.user_input))
-
-        # Add operation message to this agent's history and UI
-        await self._send_llm_response_to_ui(response.to_ui())
-        
-        # Key difference: Agent calls block the caller, delegation doesn't
-        if operation_type == OperationType.CALL:
-            # For agent calls, the calling agent continues processing but waits for AGENT_RETURN
-            # The UI is blocked by the agent_call_announcement
-            # The agent will continue processing and handle AGENT_RETURN when it arrives
-            # No special action needed here - the agent continues its normal flow
-            pass
-        else:
-            # For delegation, the calling agent continues processing
-            # The UI is not blocked, and the caller can continue with other tasks
-            pass
     
-    async def _handle_orchestration_error(self, error_msg: str, additional_info: str = "") -> None:
+    async def _handle_agent_call(self, response: AgentCallResponse) -> None:
+        """Handle agent call - verify agent exists, otherwise return failure."""
+        from objects_registry import agent_manager, frontend_api
+        from llm_auto_reply_prompts import LLMAutoReplyPrompts
+
+        # Validate user_input (fail-fast)
+        if not response.user_input:
+            await self._handle_orchestration_error(LLMAutoReplyPrompts.EMPTY_USER_INPUT_CALL, "call", response.agent_id)
+            return
+
+        try:
+            target_cfg, is_self = self._resolve_target_agent(response.agent_id)
+        except Exception as e:
+            await self._handle_orchestration_error(LLMAutoReplyPrompts.AGENT_NOT_FOUND_CALL, "call", response.agent_id, str(e))
+            return
+
+        if is_self:
+            await self._handle_orchestration_error(LLMAutoReplyPrompts.SELF_CALL, "call", response.agent_id)
+            return
+
+        # Get or create target agent instance
+        target_instance = await agent_manager().get_random_agent_instance_by_id(target_cfg.id, is_create_if_none_exist=True)
+        if not target_instance:
+            raise RuntimeError(f"Failed to get or create agent instance for {target_cfg.id}")
+
+        # Send call response to calling agent (self) - "Calling [target]"
+        response_ui = response.to_ui()
+        await self._send_llm_response_to_ui(response_ui)
+
+        # Send call notification to target agent - "Called by [caller]"
+        # Create a custom response for the target agent with different content
+        from schemas import UIAgentCallResponse
+        target_response_ui = UIAgentCallResponse(
+            agent_call=response,
+            model=target_instance.config.model,
+            agent_id=target_instance.id
+        )
+        # Override the content for the target agent
+        target_response_ui.content = f"Called by {self.id} agent"
+        await target_instance._send_llm_response_to_ui(target_response_ui)
+
+        # Schedule the target agent's work
+        target_instance._schedule(target_instance.send_to_llm(response.user_input))
+    
+    async def _handle_orchestration_error(self, error_msg: str, operation_type: str, target_agent_id: str, additional_info: str = "") -> None:
         """Handle orchestration errors with consistent error reporting and LLM recovery."""
         from llm_auto_reply_prompts import LLMAutoReplyPrompts
+        from schemas import AgentOrchestrationFailedResponse
         
         full_error = f"{error_msg}{f': {additional_info}' if additional_info else ''}"
         
         await self._send_llm_response_to_ui(
-            AgentReturnResponse(
-                return_to_agent=self,
-                returning_agent=self,
-                is_success=False,
-                reasoning=full_error
+            AgentOrchestrationFailedResponse.create(
+                operation_type=operation_type,
+                target_agent_id=target_agent_id,
+                caller_agent_id=self.id,
+                error_reason=full_error,
+                reasoning=f"Agent orchestration failed: {full_error}"
             ).to_ui()
         )
         
@@ -663,6 +722,15 @@ class Agent:
         # Continue processing after receiving agent return
         # Schedule continuation with the agent return result
         self._schedule(self.send_to_llm(f"Agent {response.returning_agent} returned: {response.reasoning}"))
+    
+    async def _handle_agent_orchestration_failed(self, response: AgentOrchestrationFailedResponse) -> None:
+        """Handle agent orchestration failure - resume UI and report error"""
+        # Handle UI communication and history management
+        await self._send_llm_response_to_ui(response.to_ui())
+        
+        # Continue processing after orchestration failure
+        # Schedule continuation with the error information
+        self._schedule(self.send_to_llm(f"Agent orchestration failed: {response.error_reason}. {response.reasoning}"))
     
     async def _handle_refinement_response(self, response: RefinementResponse) -> None:
         """Handle refinement response"""

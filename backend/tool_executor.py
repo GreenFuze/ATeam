@@ -65,7 +65,7 @@ class ToolRunner:
         module_file = os.path.join(tools_dir, f"{module_name}.py")
         
         if not os.path.exists(module_file):
-                    return ToolReturnResponse(
+                    return ToolReturnResponse.create(
             tool=name,
             result=f'Tool module not found: {module_file}',
             success=False,
@@ -77,7 +77,7 @@ class ToolRunner:
             # Import the module dynamically
             spec = importlib.util.spec_from_file_location(f"tools.{module_name}", module_file)
             if spec is None or spec.loader is None:
-                            return ToolReturnResponse(
+                            return ToolReturnResponse.create(
                 tool=name,
                 result=f'Could not load spec for {module_name}',
                 success=False,
@@ -93,7 +93,7 @@ class ToolRunner:
                 # It's a function
                 tool_func = getattr(module, function_or_method_name)
                 if not inspect.isfunction(tool_func):
-                                    return ToolReturnResponse(
+                                    return ToolReturnResponse.create(
                     tool=name,
                     result=f'{function_or_method_name} is not a function in module {module_name}',
                     success=False,
@@ -105,7 +105,7 @@ class ToolRunner:
                 if '.' in function_or_method_name:
                     class_name, method_name = function_or_method_name.split('.', 1)
                     if not hasattr(module, class_name):
-                        return ToolReturnResponse(
+                        return ToolReturnResponse.create(
                             tool=name,
                             result=f'Class {class_name} not found in module {module_name}',
                             success=False,
@@ -115,7 +115,7 @@ class ToolRunner:
                     
                     cls = getattr(module, class_name)
                     if not inspect.isclass(cls):
-                        return ToolReturnResponse(
+                        return ToolReturnResponse.create(
                             tool=name,
                             result=f'{class_name} is not a class in module {module_name}',
                             success=False,
@@ -124,7 +124,7 @@ class ToolRunner:
                         )
                     
                     if not hasattr(cls, method_name):
-                        return ToolReturnResponse(
+                        return ToolReturnResponse.create(
                             tool=name,
                             result=f'Method {method_name} not found in class {class_name}',
                             success=False,
@@ -136,7 +136,7 @@ class ToolRunner:
                     instance = cls()
                     tool_func = getattr(instance, method_name)
                     if not inspect.ismethod(tool_func):
-                        return ToolReturnResponse(
+                        return ToolReturnResponse.create(
                             tool=name,
                             result=f'{method_name} is not a method in class {class_name}',
                             success=False,
@@ -144,7 +144,7 @@ class ToolRunner:
                             agent=self.agent
                         )
                 else:
-                    return ToolReturnResponse(
+                    return ToolReturnResponse.create(
                         tool=name,
                         result=f'Function or method {function_or_method_name} not found in module {module_name}',
                         success=False,
@@ -178,7 +178,7 @@ class ToolRunner:
             else:
                 result_str = str(result)
             
-            return ToolReturnResponse(
+            return ToolReturnResponse.create(
                 tool=name,
                 result=result_str,
                 success=True,
@@ -187,7 +187,7 @@ class ToolRunner:
             )
             
         except Exception as e:
-            return ToolReturnResponse(
+            return ToolReturnResponse.create(
                 tool=name,
                 result=f'Error executing tool: {str(e)}',
                 success=False,

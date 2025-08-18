@@ -81,26 +81,9 @@ class BackendAPI:
                             session_id,
                             data_payload.get("action", "")
                         )
-                    elif message_type == "subscribe":
-                        await self.handle_subscribe(
-                            connection_id,
-                            agent_id,
-                            session_id,
-                        )
-                    elif message_type == "unsubscribe":
-                        await self.handle_unsubscribe(
-                            connection_id,
-                            agent_id,
-                            session_id,
-                        )
                     elif message_type == "get_agents":
                         logger.debug("🔄 [Backend] Routing get_agents to handle_get_agents")
                         await self.handle_get_agents()
-                    elif message_type == "register_agent":
-                        # Backward-compat: treat as subscribe without session (fail-fast if missing)
-                        if not session_id:
-                            raise ValueError("register_agent requires session_id; use subscribe instead")
-                        await self.handle_subscribe(connection_id, agent_id, session_id)
                     elif message_type == "create_agent":
                         await self.handle_create_agent(data_payload)
                     elif message_type == "update_agent":
@@ -247,15 +230,6 @@ class BackendAPI:
         except Exception as e:
             logger.error(f"Error in session management: {e}")
             raise
-    
-    async def handle_subscribe(self, connection_id: str, agent_id: str, session_id: str) -> None:
-        """Subscribe a connection to (agent_id, session_id)"""
-        frontend_api().subscribe(connection_id, agent_id, session_id)
-        logger.debug(f"Connection {connection_id} subscribed to {agent_id}[{session_id}]")
-
-    async def handle_unsubscribe(self, connection_id: str, agent_id: str, session_id: str) -> None:
-        frontend_api().unsubscribe(connection_id, agent_id, session_id)
-        logger.debug(f"Connection {connection_id} unsubscribed from {agent_id}[{session_id}]")
 
     async def handle_get_agents(self):
         """Handle get agents request from frontend"""

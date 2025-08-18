@@ -4,7 +4,7 @@
  */
 
 export interface BackendAPIMessage {
-  type: 'chat_message' | 'agent_refresh' | 'session_management' | 'subscribe' | 'unsubscribe' | 'get_agents' | 'create_agent' | 'update_agent' | 'delete_agent' | 'get_tools' | 'get_prompts' | 'get_providers' | 'get_models' | 'get_schemas' | 'update_settings' | 'update_provider' | 'update_model' | 'create_schema' | 'update_schema' | 'delete_schema' | 'update_prompt' | 'create_prompt' | 'delete_prompt' | 'get_monitoring_health' | 'get_monitoring_metrics' | 'get_monitoring_errors' | 'save_conversation' | 'list_conversations' | 'load_conversation' | 'get_embedding_models' | 'get_embedding_settings' | 'update_embedding_settings';
+  type: 'chat_message' | 'agent_refresh' | 'session_management' | 'get_agents' | 'create_agent' | 'update_agent' | 'delete_agent' | 'get_tools' | 'get_prompts' | 'get_providers' | 'get_models' | 'get_schemas' | 'update_settings' | 'update_provider' | 'update_model' | 'create_schema' | 'update_schema' | 'delete_schema' | 'update_prompt' | 'create_prompt' | 'delete_prompt' | 'get_monitoring_health' | 'get_monitoring_metrics' | 'get_monitoring_errors' | 'save_conversation' | 'list_conversations' | 'load_conversation' | 'get_embedding_models' | 'get_embedding_settings' | 'update_embedding_settings';
   message_id: string;
   timestamp: string;
   agent_id?: string;
@@ -139,37 +139,12 @@ export class BackendAPIService {
     this.sendMessage(message);
   }
 
-  public sendSessionManagement(sessionId: string, action: string): void {
+  public sendSessionManagement(action: string): void {
     const message: BackendAPIMessage = {
       type: 'session_management',
       message_id: this.generateMessageId(),
       timestamp: new Date().toISOString(),
-      session_id: sessionId,
       data: { action }
-    };
-    this.sendMessage(message);
-  }
-
-  public sendSubscribe(agentId: string, sessionId: string): void {
-    const message: BackendAPIMessage = {
-      type: 'subscribe',
-      message_id: this.generateMessageId(),
-      timestamp: new Date().toISOString(),
-      agent_id: agentId,
-      session_id: sessionId,
-      data: {}
-    };
-    this.sendMessage(message);
-  }
-
-  public sendUnsubscribe(agentId: string, sessionId: string): void {
-    const message: BackendAPIMessage = {
-      type: 'unsubscribe',
-      message_id: this.generateMessageId(),
-      timestamp: new Date().toISOString(),
-      agent_id: agentId,
-      session_id: sessionId,
-      data: {}
     };
     this.sendMessage(message);
   }

@@ -24,6 +24,12 @@ ATeam is a multi-agent system with a React frontend and Python backend, featurin
 - **Delegation**: Agent hands off work to another agent without expecting return
 - **Calling**: Agent calls another agent and expects a response
 - **Agent-level Queue**: Each agent has its own task queue for sequential processing
+- **User Input Control**: 
+  - **AGENT_CALL**: Disables user input when AGENT_CALL message is received (agent is waiting for return)
+  - **AGENT_RETURN**: Re-enables user input when AGENT_RETURN message is received
+  - **AGENT_DELEGATE**: Does NOT disable user input (key difference from calls)
+  - **TOOL_CALL**: Disables user input until TOOL_RETURN is received
+- **Frontend Logic**: Backend sends appropriate messages to control UI state, no frontend tracking needed
 
 ### Message Types
 - **Structured Responses**: Backend response classes (AgentReturnResponse, ToolCallResponse, etc.)
@@ -36,6 +42,48 @@ ATeam is a multi-agent system with a React frontend and Python backend, featurin
 - **Agent-level Locks**: Async locks for agent-specific operations
 
 ## Recent Changes
+
+### ✅ Agent Orchestration Architecture Refactoring (Latest Update)
+- **Backend Announcement System Removal**: Completely removed `_DualAgentSender` class and announcement methods (`delegation_announcement`, `agent_call_announcement`) from `frontend_api.py`
+- **Direct Agent Response Flow**: AGENT_DELEGATE, AGENT_CALL, and AGENT_RETURN now sent as regular agent responses directly to both agents involved
+- **Backend State Management**: User input control (enable/disable) is managed by backend, not frontend
+- **Frontend Display Only**: Frontend only handles message display with badges and reasoning, no orchestration logic
+- **Message Display**: Added custom badges ("AGENT DELEGATE", "AGENT CALL", "AGENT RETURN") and reasoning field display
+- **Architecture Benefits**:
+  - ✅ **Simplified Backend**: No complex announcement system, direct agent-to-agent communication
+  - ✅ **Proper Separation**: Backend manages orchestration state, frontend handles display only
+  - ✅ **Better Message Flow**: Actual agent responses appear before any waiting states
+  - ✅ **Type Safety**: Proper message type handling with badges and reasoning display
+
+### ✅ WebSocket Subscription System Removal
+- **Complete Subscription System Removal**: Eliminated the entire subscription system that was causing WebSocket connection mismatches
+- **Root Cause**: BackendAPI was passing `backend_*` connection IDs to FrontendAPI subscription system, but FrontendAPI only manages `frontend_*` connections
+- **Solution**: Always broadcast agent messages to all active FrontendAPI connections instead of using targeted subscriptions
+- **Architecture Simplification**: 
+  - Removed subscription data structures (`self.subscriptions`, `self.connection_index`)
+  - Removed `subscribe()` and `unsubscribe()` methods from FrontendAPI
+  - Removed subscription handlers from BackendAPI
+  - Removed subscription methods from frontend services
+  - Removed subscription calls from AgentChat component
+- **Benefits**: 
+  - ✅ Multi-tab/multi-device support: All connected clients receive agent updates
+  - ✅ No connection mismatches: Eliminates `backend_*` vs `frontend_*` confusion
+  - ✅ Cleaner architecture: Simpler, more maintainable code
+  - ✅ Better reliability: No more "Connection not found" errors
+- **Current Flow**: Agent responses → FrontendAPI broadcasts to all active connections → All tabs/devices receive updates
+
+### ✅ Logging and Error Handling Improvements (Latest Update)
+- **Logging Level Optimization**: Changed all frontend_api logs from INFO to DEBUG level to reduce log verbosity
+- **Logger Configuration**: Updated logger to output DEBUG level to ateam.log file for comprehensive debugging
+- **Raw LLM Response Logging**: Enhanced "INFO: Raw LLM response for agent {agent_id}" logs for better traceability
+- **ErrorChatResponse Recovery**: Fixed ErrorChatResponse initialization to properly set private attributes (_model, _agent_id) for error recovery
+- **Metadata Duplication Cleanup**: Removed duplicated fields (action, agent_id, target_agent) from metadata to eliminate redundancy
+- **Benefits**:
+  - ✅ **Better Debugging**: DEBUG level logs provide detailed information without cluttering console
+  - ✅ **Agent Traceability**: Agent ID included in LLM response logs for easier debugging
+  - ✅ **Error Recovery**: Agents can now properly recover from JSON parsing errors
+  - ✅ **Cleaner Data**: No metadata duplication, cleaner message structure
+  - ✅ **Improved Performance**: Reduced log verbosity improves system performance
 
 ### Agent-Level Queue and Lock Implementation
 - Added `_task_queue` and `_worker_task` to each agent for sequential processing
@@ -1594,7 +1642,7 @@ ATeam/
 │   ├── prompt_manager.py       # Prompt management (fail fast implementation)
 │   ├── notification_manager.py # WebSocket-based notification broadcasting
 │   ├── notification_utils.py   # Utility functions for structured logging
-│   ├── chat_engine.py          # Chat processing with context tracking
+│   ├── chat_engine.py          # Chat processing logic with context window tracking
 │   ├── monitoring.py           # System monitoring
 │   ├── models.yaml             # Model configurations (complete OpenAI coverage)
 │   ├── agents.yaml             # Agent configurations
@@ -1724,3 +1772,33 @@ ATeam/
 - **No Silent Failures**: Application never continues running with missing or invalid resources
 
 The LLM model management system is now complete with all requested features implemented and working! The comprehensive error handling system ensures the application never continues running in an invalid state, while the notification system provides real-time error/warning visibility. The global manager registry pattern provides centralized manager management with no local copies, ensuring all components always access current manager instances. The fail-fast architecture dramatically improves the debugging experience for users and developers alike - no more hidden errors in console output, everything is immediately visible and actionable! 🎉 
+
+### ✅ Agent Orchestration Architecture Refactoring (Latest Update)
+- **Backend Announcement System Removal**: Completely removed `_DualAgentSender` class and announcement methods (`delegation_announcement`, `agent_call_announcement`) from `frontend_api.py`
+- **Direct Agent Response Flow**: AGENT_DELEGATE, AGENT_CALL, and AGENT_RETURN now sent as regular agent responses directly to both agents involved
+- **Backend State Management**: User input control (enable/disable) is managed by backend, not frontend
+- **Frontend Display Only**: Frontend only handles message display with badges and reasoning, no orchestration logic
+- **Message Display**: Added custom badges ("AGENT_DELEGATE", "AGENT_CALL", "AGENT_RETURN") and reasoning field display
+- **Agent-Specific Messages**: Fixed delegation and call messages to show different content for each agent:
+  - **Delegating Agent**: "Delegating to [target_agent]" 
+  - **Delegated Agent**: "Delegated by [caller_agent] agent"
+  - **Calling Agent**: "Calling [target_agent]"
+  - **Called Agent**: "Called by [caller_agent] agent"
+- **Component Inheritance Architecture**: Completely refactored MessageDisplay into inheritance hierarchy:
+  - **Base Components**: `BaseMessageDisplay`, `ToolBaseMessageDisplay`, `AgentOrchestrationBaseMessageDisplay`
+  - **Specific Components**: `ToolCallMessageDisplay`, `ToolReturnMessageDisplay`, `DelegatingAgentMessageDisplay`, `DelegatedAgentMessageDisplay`, etc.
+  - **Factory Pattern**: `MessageDisplayFactory` intelligently selects correct component based on message type
+  - **Benefits**: Single responsibility, maintainability, extensibility, type safety, testability
+- **Old Component Removal**: Deleted monolithic `MessageDisplay.tsx` and replaced with factory-based architecture
+- **Agent Information Cache System**: Implemented centralized agent information management:
+  - **AgentInfoService**: System-wide cache for agent information with permanent caching (agent info is static)
+  - **Fail-Fast Agent Name Loading**: Components fetch agent info from backend when not cached, no fallbacks
+  - **Proper Error Handling**: Components show error messages when agent info cannot be loaded
+  - **Cache Management**: Methods to clear cache for specific agents or entire cache
+  - **Lazy Loading**: Agent info only fetched when actually needed by components
+- **Architecture Benefits**:
+  - ✅ **Simplified Backend**: No complex announcement system, direct agent-to-agent communication
+  - ✅ **Proper Separation**: Backend manages orchestration state, frontend handles display only
+  - ✅ **Better Message Flow**: Actual agent responses appear before any waiting states
+  - ✅ **Type Safety**: Proper message type handling with badges and reasoning display
+  - ✅ **Component Architecture**: Clean inheritance hierarchy with factory pattern

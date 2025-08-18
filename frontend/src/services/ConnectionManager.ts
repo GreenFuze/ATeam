@@ -160,16 +160,8 @@ export class ConnectionManager {
     backendAPIService.sendAgentRefresh(agentId, sessionId);
   }
 
-  public sendSessionManagement(sessionId: string, action: string): void {
-    backendAPIService.sendSessionManagement(sessionId, action);
-  }
-
-  public sendSubscribe(agentId: string, sessionId: string): void {
-    backendAPIService.sendSubscribe(agentId, sessionId);
-  }
-
-  public sendUnsubscribe(agentId: string, sessionId: string): void {
-    backendAPIService.sendUnsubscribe(agentId, sessionId);
+  public sendSessionManagement(action: string): void {
+    backendAPIService.sendSessionManagement(action);
   }
 
   public sendSaveConversation(agentId: string, sessionId: string): void {

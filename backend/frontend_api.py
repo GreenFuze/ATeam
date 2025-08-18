@@ -32,10 +32,6 @@ class FrontendAPI:
     
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
-        # Subscriptions: (agent_id, session_id) -> [connection_ids]
-        self.subscriptions: Dict[tuple[str, str], List[str]] = {}
-        # Reverse index: connection_id -> set((agent_id, session_id))
-        self.connection_index: Dict[str, set[tuple[str, str]]] = {}
     
     async def connect(self, websocket: WebSocket, connection_id: str):
         """Accept a new WebSocket connection from frontend"""
@@ -47,91 +43,83 @@ class FrontendAPI:
         """Remove a WebSocket connection"""
         if connection_id in self.active_connections:
             del self.active_connections[connection_id]
-            # Remove from subscriptions
-            pairs = self.connection_index.get(connection_id, set())
-            for pair in list(pairs):
-                if pair in self.subscriptions and connection_id in self.subscriptions[pair]:
-                    self.subscriptions[pair].remove(connection_id)
-                    if not self.subscriptions[pair]:
-                        del self.subscriptions[pair]
-            if connection_id in self.connection_index:
-                del self.connection_index[connection_id]
             logger.debug(f"Frontend disconnected: {connection_id}")
 
-    def subscribe(self, connection_id: str, agent_id: str, session_id: str) -> None:
-        """Subscribe a connection to (agent_id, session_id). Fail-fast on missing ids."""
-        if not agent_id or not session_id:
-            raise ValueError("agent_id and session_id are required for subscription")
-        key = (agent_id, session_id)
-        if key not in self.subscriptions:
-            self.subscriptions[key] = []
-        if connection_id not in self.subscriptions[key]:
-            self.subscriptions[key].append(connection_id)
-        if connection_id not in self.connection_index:
-            self.connection_index[connection_id] = set()
-        self.connection_index[connection_id].add(key)
-
-    def unsubscribe(self, connection_id: str, agent_id: str, session_id: str) -> None:
-        key = (agent_id, session_id)
-        if key in self.subscriptions and connection_id in self.subscriptions[key]:
-            self.subscriptions[key].remove(connection_id)
-            if not self.subscriptions[key]:
-                del self.subscriptions[key]
-        if connection_id in self.connection_index and key in self.connection_index[connection_id]:
-            self.connection_index[connection_id].remove(key)
-            if not self.connection_index[connection_id]:
-                del self.connection_index[connection_id]
-    
     async def send_to_connection(self, connection_id: str, message: Dict[str, Any]) -> bool:
         """Send a message to a specific connection. Returns True if successful, False if connection failed."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.debug(f"🔍 DEBUG: send_to_connection called for connection_id: {connection_id}")
+        logger.debug(f"🔍 DEBUG: Message type: {message.get('type', 'unknown')}")
+        logger.debug(f"🔍 DEBUG: Active connections keys: {list(self.active_connections.keys())}")
+        
         if connection_id not in self.active_connections:
-            logger.debug(f"Connection {connection_id} not found in active connections")
+            logger.warning(f"Connection {connection_id} not found in active connections")
             return False
         
+        websocket = self.active_connections[connection_id]
+        logger.debug(f"🔍 DEBUG: Found websocket for connection {connection_id}")
+        
+        # Check if WebSocket is still connected
+        if websocket.client_state == WebSocketState.DISCONNECTED:
+            logger.warning(f"WebSocket {connection_id} is disconnected, removing from active connections")
+            del self.active_connections[connection_id]
+            return False
+        
+        logger.debug(f"🔍 DEBUG: WebSocket client_state: {websocket.client_state}")
+        
         try:
-            websocket = self.active_connections[connection_id]
+            # Convert message to JSON string
+            if isinstance(message, dict):
+                message_str = json.dumps(message)
+            else:
+                message_str = str(message)
             
-            # Enforce connected state; gracefully handle disconnections
-            if websocket.client_state != WebSocketState.CONNECTED:
-                logger.debug(f"Connection {connection_id} is not connected, removing it")
-                self.disconnect(connection_id)
-                return False
+            logger.debug(f"🔍 DEBUG: About to send message: {message_str[:200]}...")
             
-            message_str = json.dumps(message)
+            # Send the message
             await websocket.send_text(message_str)
+            logger.debug(f"🔍 DEBUG: Successfully sent message to {connection_id}")
             return True
             
-        except WebSocketDisconnect:
-            logger.debug(f"WebSocket disconnected for {connection_id}, removing it")
+        except WebSocketDisconnect as e:
+            logger.error(f"🔍 DEBUG: WebSocket disconnected for {connection_id}: {e}")
             self.disconnect(connection_id)
             return False
         except Exception as e:
-            logger.error(f"Failed to send message to connection {connection_id}: {e}")
+            logger.error(f"🔍 DEBUG: Failed to send message to connection {connection_id}: {e}")
+            logger.error(f"🔍 DEBUG: Exception type: {type(e)}")
+            import traceback
+            logger.error(f"🔍 DEBUG: Traceback: {traceback.format_exc()}")
             self.disconnect(connection_id)
             return False
     
     async def _send_to_agent_message(self, ref: 'SessionRef', message: Dict[str, Any]):
-        """Prefer targeted delivery to subscribed connections; fallback to broadcast if none."""
-        key = (ref.agent_id, ref.session_id)
-        connection_ids = self.subscriptions.get(key)
-        if connection_ids:
-            # Send to all subscribed connections, gracefully handle failures
-            for connection_id in list(connection_ids):
-                success = await self.send_to_connection(connection_id, message)
-                if not success:
-                    # Connection failed, it's already been removed from subscriptions
-                    # Continue with other connections
-                    continue
-            return
-        # Fallback: broadcast to all connections (initial hydration race-safe)
+        """Send agent-specific messages to all active FrontendAPI connections for multi-tab/multi-device support."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.debug(f"🔍 DEBUG: _send_to_agent_message - agent_id: {ref.agent_id}, broadcasting to all connections")
+        
+        # Always broadcast to all active FrontendAPI connections
+        # This ensures all tabs/devices receive updates for the agent
         await self._send_to_non_agent_message(message)
 
     async def _send_to_non_agent_message(self, message: Dict[str, Any]):
         """Send message to all active connections (non-agent-specific messages)."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"🔍 DEBUG: Broadcasting message to all connections: {message.get('type', 'unknown')}")
+        
         # Create a copy of the keys to avoid modification during iteration
         connection_ids = list(self.active_connections.keys())
+        logger.debug(f"🔍 DEBUG: Active connections: {connection_ids}")
+        
         for connection_id in connection_ids:
+            logger.debug(f"🔍 DEBUG: Sending to connection: {connection_id}")
             success = await self.send_to_connection(connection_id, message)
+            logger.debug(f"🔍 DEBUG: Send result: {success}")
             if not success:
                 # Connection failed, it's already been removed from active_connections
                 # Continue with other connections
@@ -187,7 +175,13 @@ class FrontendAPI:
             await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def send_agent_response_to_frontend(self, response: UILLMResponse, context_usage: ContextUsageData) -> None:
+            # Debug: Log what we're receiving
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"🔍 DEBUG: Frontend API received - type: {response.message_type}, action: {response.action}, is_sent: {response.is_sent}")
+            
             if response.is_sent:
+                logger.debug(f"🔍 DEBUG: Message already sent, skipping")
                 return
             
             assert response.message_type is not None, "response.message_type is required"
@@ -281,71 +275,23 @@ class FrontendAPI:
             await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
         async def tool_call_announcement(self, tool_response: UILLMResponse, context_usage: ContextUsageData) -> None:
-            # Send the tool call announcement directly as UILLMResponse
-            await self._api._send_to_agent_message(self._session, tool_response.model_dump())
-            
-            # Send the tool call details immediately after
+            # Send the tool call details first
             await self.send_agent_response_to_frontend(tool_response, context_usage)
-
-    class _DualAgentSender:
-        def __init__(self, api: 'FrontendAPI', a_ref: 'SessionRef', b_ref: 'SessionRef'):
-            self._api = api
-            self._a = a_ref
-            self._b = b_ref
-
-        async def delegation_announcement(self, reason: str) -> None:
-            # Send UILLMResponse via envelope for delegation announcement
-            delegation_response = UILLMResponse(
-                content=f"Agent {self._a.agent_name} delegated to {self._b.agent_name}",
-                message_type=MessageType.AGENT_DELEGATE,
-                action=MessageType.AGENT_DELEGATE,
-                reasoning=reason or "No reason provided.",
-                target_agent_id=self._b.agent_id,
-                metadata={
-                    "delegating_agent": self._a.agent_name,
-                    "delegated_agent": self._b.agent_name
-                }
-            )
             
+            # Send the tool call announcement (waiting message) after
             envelope = FrontendAPIEnvelope(
-                type=FrontendMessageType.AGENT_DELEGATE,
-                agent_id=self._a.agent_id,
-                agent_name=self._a.agent_name,
-                session_id=self._a.session_id,
-                data=delegation_response.model_dump()
+                type=FrontendMessageType.TOOL_CALL,
+                agent_id=self._session.agent_id,
+                agent_name=self._session.agent_name,
+                session_id=self._session.session_id,
+                data=tool_response.model_dump()
             )
-            await self._api._send_to_agent_message(self._b, envelope.model_dump())
-
-        async def agent_call_announcement(self, reason: str) -> None:
-            # Send UILLMResponse via envelope for agent call announcement
-            call_response = UILLMResponse(
-                content=f"Agent {self._a.agent_name} is calling {self._b.agent_name}",
-                message_type=MessageType.AGENT_CALL,
-                action=MessageType.AGENT_CALL,
-                reasoning=reason or "No reason provided.",
-                target_agent_id=self._b.agent_id,
-                metadata={
-                    "calling_agent": self._a.agent_name,
-                    "callee_agent": self._b.agent_name,
-                    "expects_return": True
-                }
-            )
-            
-            envelope = FrontendAPIEnvelope(
-                type=FrontendMessageType.AGENT_CALL,
-                agent_id=self._a.agent_id,
-                agent_name=self._a.agent_name,
-                session_id=self._a.session_id,
-                data=call_response.model_dump()
-            )
-            await self._api._send_to_agent_message(self._b, envelope.model_dump())
+            await self._api._send_to_agent_message(self._session, envelope.model_dump())
 
     # Factories
     def send_to_agent(self, ref: 'SessionRef') -> '_SingleAgentSender':
         return FrontendAPI._SingleAgentSender(self, ref)
-
-    def send_to_agents(self, a_ref: 'SessionRef', b_ref: 'SessionRef') -> '_DualAgentSender':
-        return FrontendAPI._DualAgentSender(self, a_ref, b_ref)
+    
     
     async def send_seed_messages(self, ref: SessionRef, messages: List[Message]):
         """Send seed messages to frontend"""
@@ -470,6 +416,7 @@ class FrontendAPI:
                 "timestamp": datetime.now().isoformat()
             }
         )
-        # Broadcast session_created so frontend can learn the session_id and then subscribe
+        # Broadcast session_created so frontend can learn the session_id
+        # All connected frontends will receive this message automatically
         for cid in list(self.active_connections.keys()):
             await self.send_to_connection(cid, envelope.model_dump())

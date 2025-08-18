@@ -30,13 +30,16 @@ logger = logging.getLogger()
 for h in list(logger.handlers):
     logger.removeHandler(h)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_file_path, mode='w', encoding='utf-8'),
         logging.StreamHandler()
     ]
 )
+
+# Suppress httpx HTTP request logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Initialize global managers after logging is configured
 initialize_managers()

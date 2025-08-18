@@ -238,4 +238,7 @@ alwaysApply: true
 - **Blocking Operations**: Avoid blocking operations in async code
 - **Inefficient Algorithms**: Choose appropriate algorithms
 
+## Bug fixing
+- If you are not 100% confident in a bug fix you write, add logs that their output, or lack of output, would increase your confidence in the fix, or show you that the fix is incorrect
+
 This comprehensive list should serve as a pre-prompt for future sessions to ensure consistent adherence to your preferred programming styles and principles.

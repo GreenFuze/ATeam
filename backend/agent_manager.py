@@ -373,8 +373,9 @@ class AgentManager:
         for msg in conv_data.responses:
             msg_model = Message.model_validate(msg)
             messages_models.append(msg_model)
-        # Assign reconstructed messages
-        agent_instance.messages = messages_models
+        # Assign reconstructed messages to history
+        for msg in messages_models:
+            agent_instance.history.append_existing_message(msg)
 
         # Switch mapping to the loaded session id
         # Rebind the agent instance to the loaded session id

@@ -137,71 +137,26 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   useEffect(() => {
     if (agentId) {
       connectionManager.setFrontendAPIHandlers({
-        onSystemMessage: (_agentId: string, _sessionId: string, data: any) => {
-          // Assert that data is properly structured - if not, there's a backend bug
-          if (!data) {
-            throw new Error('Backend sent undefined data for system_message - this indicates a backend bug');
-          }
-          if (!data.content) {
-            throw new Error('Backend sent malformed system_message data - missing content - this indicates a backend bug');
-          }
-          // Cache messages for non-active agents without touching the active UI
+        onSystemMessage: (_agentId: string, _sessionId: string, message: any) => {
+          // Only show system messages for the current agent
           if (_agentId !== agentId) {
-            const sysMsg: Message = {
-              id: `system-${Date.now()}`,
-              agent_id: _agentId,
-              content: data.content,
-              message_type: MessageType.SYSTEM,
-              timestamp: data.timestamp || new Date().toISOString(),
-              metadata: data.metadata || {},
-            };
-            connectionManager.appendMessage(_agentId, sysMsg);
             return;
           }
           
           const systemMessage: Message = {
             id: `system-${Date.now()}`,
             agent_id: agentId,
-            content: data.content,
+            content: message.content || "System message",
             message_type: MessageType.SYSTEM,
-            timestamp: data.timestamp || new Date().toISOString(),
-            metadata: { ...(data.metadata || {}), agent_name: data.agent_name },
+            timestamp: message.timestamp || new Date().toISOString(),
+            metadata: message.metadata || {},
           };
+          
           setMessages(prev => [...prev, systemMessage]);
           connectionManager.appendMessage(agentId, systemMessage);
           if (initialAutoScrollPendingRef.current) {
             autoScrollAllowedRef.current = true;
             initialAutoScrollPendingRef.current = false;
-          }
-        },
-        onAgentCallAnnouncement: (_agentId: string, _sessionId: string, message: any) => {
-          // Only show announcements for the current agent
-          if (_agentId !== agentId) {
-            return;
-          }
-          
-          // Create a waiting message to show in the chat
-          const waitingMessage: Message = {
-            id: `waiting-${Date.now()}`,
-            agent_id: agentId,
-            content: message.reasoning || "Agent is waiting for another agent to complete a task...",
-            message_type: MessageType.SYSTEM,
-            timestamp: message.timestamp || new Date().toISOString(),
-            metadata: { 
-              ...(message.metadata || {}), 
-              isWaiting: true,
-              callingAgent: message.metadata?.calling_agent,
-              calleeAgent: message.metadata?.callee_agent,
-              expectsReturn: message.metadata?.expects_return
-            },
-          };
-          
-          setMessages(prev => [...prev, waitingMessage]);
-          connectionManager.appendMessage(agentId, waitingMessage);
-          
-          // Auto-scroll to show the waiting message
-          if (atBottomRef.current) {
-            scrollToBottom();
           }
         },
         onToolCallAnnouncement: (_agentId: string, _sessionId: string, message: any) => {
@@ -242,6 +197,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
           if (!data.content) {
             throw new Error('Backend sent malformed agent_response data - missing content - this indicates a backend bug');
           }
+          
           // Route messages for other agents to cache only
           if (_agentId !== agentId) {
             let messageType = MessageType.CHAT_RESPONSE; // default
@@ -284,7 +240,10 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             setMessages(prev => prev.filter(m => m.id !== toRemoveId));
             streamingMessageIdRef.current = null;
           }
-
+          
+          // For regular chat responses, ensure loading is false
+          setIsLoading(false);
+          
           // Deduplicate by message_id if present
           const dedupeId = data.message_id ? `agent-${data.message_id}` : `agent-${Date.now()}`;
           const agentMessage: Message = {
@@ -293,19 +252,36 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             content: data.content,
             message_type: messageType,
             timestamp: data.timestamp || new Date().toISOString(),
-            metadata: { ...(data.metadata || {}), agent_name: data.agent_name },
+            metadata: {
+              ...(data.metadata || {}),
+              agent_name: data.agent_name,
+              // Add badges for agent orchestration messages
+              badge: data.message_type === 'AGENT_DELEGATE' ? 'AGENT DELEGATE' :
+                     data.message_type === 'AGENT_CALL' ? 'AGENT CALL' :
+                     data.message_type === 'AGENT_RETURN' ? 'AGENT RETURN' :
+                     data.message_type === 'TOOL_CALL' ? 'TOOL CALL' :
+                     data.message_type === 'TOOL_RETURN' ? 'TOOL RETURN' :
+                     data.message_type === 'ERROR' ? 'ERROR' : undefined,
+              // Include reasoning for agent orchestration messages
+              reasoning: data.reasoning,
+            },
             action: data.action,
             reasoning: data.reasoning,
             tool_name: data.tool_name,
             tool_parameters: data.tool_parameters,
             target_agent_id: data.target_agent_id,
           };
+          
           setMessages(prev => {
             if (prev.some(m => m.id === agentMessage.id)) return prev;
             return [...prev, agentMessage];
           });
           connectionManager.appendMessage(agentId, agentMessage);
-          setIsLoading(false);
+          
+          // Auto-scroll to show the new message
+          if (atBottomRef.current) {
+            scrollToBottom();
+          }
         },
         onAgentStream: (_agentId: string, _sessionId: string, data: { delta: string; message_id?: string; action?: string }) => {
           if (_agentId !== agentId) return; // Stream only for active agent UI
@@ -459,8 +435,6 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
           }
           // Always update the session id cache per agent
           connectionManager.setSessionId(receivedAgentId, data.session_id);
-          // Subscribe to the routed stream for this agent/session
-          connectionManager.sendSubscribe(receivedAgentId, data.session_id);
           if (receivedAgentId === agentId) {
             setSessionId(data.session_id);
             setIsLoading(false);
@@ -775,7 +749,6 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
                 <MessageDisplay
                   key={message.id}
                   message={message}
-                  agentName={agentInfo?.name}
                   isCollapsible={message.message_type === 'SYSTEM'}
                   isCollapsed={message.message_type === 'SYSTEM'}
                 />

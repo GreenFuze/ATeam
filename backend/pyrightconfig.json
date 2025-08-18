@@ -8,5 +8,13 @@
     "**/static"
   ],
   "pythonVersion": "3.12",
-  "pythonPlatform": "All"
+  "pythonPlatform": "All",
+  "typeCheckingMode": "strict",
+  "useLibraryCodeForTypes": true,
+  "reportMissingImports": false,
+  "reportMissingTypeStubs": false,
+  "reportUnusedImport": "warning",
+  "reportUnusedClass": "warning",
+  "reportUnusedFunction": "warning",
+  "reportDuplicateImport": "warning"
 }

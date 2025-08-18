@@ -16,10 +16,11 @@ import threading
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed from INFO to DEBUG
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler()
+        logging.StreamHandler(),  # Console output
+        logging.FileHandler('ateam.log')  # File output for DEBUG level
     ]
 )
 

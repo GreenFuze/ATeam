@@ -7,6 +7,44 @@ import json
 if TYPE_CHECKING:
     from agent import Agent
 
+def ensure_agent_instance(agent: Union['Agent', str]) -> 'Agent':
+    """
+    Ensure we have an Agent instance, converting from string if needed.
+    
+    Args:
+        agent: Either an Agent instance or a string agent ID/name
+        
+    Returns:
+        Agent instance
+        
+    Raises:
+        ValueError: If agent is neither Agent nor str, or if string lookup fails
+    """
+    if isinstance(agent, str):
+        # Import here to avoid circular imports
+        from objects_registry import agent_manager
+        
+        # Try to get agent by name first (more user-friendly)
+        agent_config = agent_manager().get_agent_by_name(agent)
+        if agent_config:
+            # Create a new instance for this agent
+            from agent import Agent
+            return Agent(agent_config)
+        
+        # If not found by name, try by ID
+        try:
+            agent_config = agent_manager().get_agent_config(agent)
+            from agent import Agent
+            return Agent(agent_config)
+        except Exception:
+            raise ValueError(f'Agent "{agent}" not found by name or ID')
+    
+    elif hasattr(agent, 'id') and hasattr(agent, 'config'):  # Check if it's an Agent instance
+        return agent
+    
+    else:
+        raise ValueError(f'Expected Agent instance or string, got {type(agent)}')
+
 class UnknownActionError(Exception):
     """Raised when an LLM response contains an unknown or illegal action type."""
     pass
@@ -21,6 +59,7 @@ class MessageType(str, Enum):
     AGENT_CALL = "AGENT_CALL"
     AGENT_RETURN = "AGENT_RETURN"
     AGENT_DELEGATE = "AGENT_DELEGATE"
+    AGENT_ORCHESTRATION_FAILED = "AGENT_ORCHESTRATION_FAILED"
     REFINEMENT_RESPONSE = "REFINEMENT_RESPONSE"
     SYSTEM = "SYSTEM"
     SEED_MESSAGE = "seed_message"
@@ -76,116 +115,171 @@ class StructuredResponse(BaseModel):
 class ChatResponse(StructuredResponse):
     content: str
 
-    def __init__(self, content: str, reasoning: str, agent: 'Agent'):
-        self._agent = agent
-        self._model = agent.config.model
-        self._agent_id = agent.id
-        super().__init__(
-            action=MessageType.CHAT_RESPONSE.value,
-            reasoning=reasoning
+    @classmethod
+    def create(cls, content: str, reasoning: str, agent: 'Agent') -> 'ChatResponse':
+        """Factory method to create ChatResponse with proper initialization"""
+        instance = cls(
+            action=str(MessageType.CHAT_RESPONSE.value),
+            reasoning=reasoning,
+            content=content
         )
-        # Set the specific fields after parent constructor
-        self.content = content
+        # Set private attributes after creation
+        object.__setattr__(instance, '_agent', agent)
+        object.__setattr__(instance, '_model', agent.config.model)
+        object.__setattr__(instance, '_agent_id', agent.id)
+        return instance
 
     def to_ui(self, icon: Optional[MessageIcon] = None) -> 'UIChatResponse':
         """Convert to UI response"""
-        return UIChatResponse(self, self._model, self._agent_id, icon)
+        _model = getattr(self, '_model', None)
+        _agent_id = getattr(self, '_agent_id', None)
+        if _model is None or _agent_id is None:
+            raise ValueError("ChatResponse not properly initialized - missing _model or _agent_id")
+        return UIChatResponse(self, _model, _agent_id, icon)
 
 class ErrorChatResponse(ChatResponse):
-    def __init__(self, error: Exception | str, agent: 'Agent'):
+    @classmethod
+    def create(cls, error: Exception | str, agent: 'Agent') -> 'ErrorChatResponse':
+        """Factory method to create ErrorChatResponse with proper initialization"""
         content = f"Error: {str(error)}"
         # Default reasoning per spec
-        super().__init__(content=content, reasoning="An error has occurred; details are in the content.", agent=agent)
+        instance = super().create(content=content, reasoning="An error has occurred; details are in the content.", agent=agent)
+        # Create ErrorChatResponse instance and set private attributes
+        error_instance = cls.model_validate(instance.model_dump())
+        object.__setattr__(error_instance, '_agent', agent)
+        object.__setattr__(error_instance, '_model', agent.config.model)
+        object.__setattr__(error_instance, '_agent_id', agent.id)
+        return error_instance
 
     def to_ui(self) -> 'UIErrorChatResponse':
         """Convert to UI response"""
-        return UIErrorChatResponse(self, self._model, self._agent_id, MessageIcon.ERROR)
+        _model = getattr(self, '_model', None)
+        _agent_id = getattr(self, '_agent_id', None)
+        if _model is None or _agent_id is None:
+            raise ValueError("ErrorChatResponse not properly initialized - missing _model or _agent_id")
+        return UIErrorChatResponse(self, _model, _agent_id, MessageIcon.ERROR)
 
 class ToolCallResponse(StructuredResponse):
     tool: str
     args: Dict[str, Any]
 
-    def __init__(self, tool: str, args: Dict[str, Any], reasoning: str, agent: 'Agent'):
-        self._agent = agent
-        self._model = agent.config.model
-        self._agent_id = agent.id
-        super().__init__(
-            action=MessageType.TOOL_CALL.value,
-            reasoning=reasoning
+    @classmethod
+    def create(cls, tool: str, args: Dict[str, Any], reasoning: str, agent: 'Agent') -> 'ToolCallResponse':
+        """Factory method to create ToolCallResponse with proper initialization"""
+        instance = cls(
+            action=str(MessageType.TOOL_CALL.value),
+            reasoning=reasoning,
+            tool=tool,
+            args=args
         )
-        # Set the specific fields after parent constructor
-        self.tool = tool
-        self.args = args
+        # Set private attributes after creation
+        object.__setattr__(instance, '_agent', agent)
+        object.__setattr__(instance, '_model', agent.config.model)
+        object.__setattr__(instance, '_agent_id', agent.id)
+        return instance
 
     def to_ui(self) -> 'UIToolCallResponse':
         """Convert to UI response"""
-        return UIToolCallResponse(self, self._model, self._agent_id)
+        _model = getattr(self, '_model', None)
+        _agent_id = getattr(self, '_agent_id', None)
+        if _model is None or _agent_id is None:
+            raise ValueError("ToolCallResponse not properly initialized - missing _model or _agent_id")
+        return UIToolCallResponse(self, _model, _agent_id)
 
 class ToolReturnResponse(StructuredResponse):
     tool: str
     result: str
     success: str = Field(..., pattern="^(True|False)$")
 
-    def __init__(self, tool: str, result: str, success: bool, reasoning: str, agent: 'Agent'):
-        self._agent = agent
-        self._model = agent.config.model
-        self._agent_id = agent.id
-        super().__init__(
-            action=MessageType.TOOL_RETURN.value,
-            reasoning=reasoning
+    @classmethod
+    def create(cls, tool: str, result: str, success: bool, reasoning: str, agent: 'Agent') -> 'ToolReturnResponse':
+        """Factory method to create ToolReturnResponse with proper initialization"""
+        instance = cls(
+            action=str(MessageType.TOOL_RETURN.value),
+            reasoning=reasoning,
+            tool=tool,
+            result=result,
+            success="True" if success else "False"
         )
-        # Set the specific fields after parent constructor
-        self.tool = tool
-        self.result = result
-        self.success = "True" if success else "False"
+        # Set private attributes after creation
+        object.__setattr__(instance, '_agent', agent)
+        object.__setattr__(instance, '_model', agent.config.model)
+        object.__setattr__(instance, '_agent_id', agent.id)
+        return instance
 
     def to_ui(self) -> 'UIToolReturnResponse':
         """Convert to UI response"""
-        return UIToolReturnResponse(self, self._model, self._agent_id)
+        _model = getattr(self, '_model', None)
+        _agent_id = getattr(self, '_agent_id', None)
+        if _model is None or _agent_id is None:
+            raise ValueError("ToolReturnResponse not properly initialized - missing _model or _agent_id")
+        return UIToolReturnResponse(self, _model, _agent_id)
 
 class AgentDelegateResponse(StructuredResponse):
     agent_id: str
     caller_agent_id: str
     user_input: str
 
-    def __init__(self, target_agent: 'Agent', caller_agent: 'Agent', user_input: str, reasoning: str):
-        self._caller_agent = caller_agent
-        self._model = caller_agent.config.model
-        self._agent_id = caller_agent.id
-        super().__init__(
-            action=MessageType.AGENT_DELEGATE.value,
-            reasoning=reasoning
+    @classmethod
+    def create(cls, agent: Union['Agent', str], caller_agent: Union['Agent', str], user_input: str, reasoning: str) -> 'AgentDelegateResponse':
+        """Factory method to create AgentDelegateResponse with proper initialization"""
+        # Ensure we have Agent instances
+        target_agent = ensure_agent_instance(agent)
+        caller_agent = ensure_agent_instance(caller_agent)
+        
+        instance = cls(
+            action=str(MessageType.AGENT_DELEGATE.value),
+            reasoning=reasoning,
+            agent_id=target_agent.id,
+            caller_agent_id=caller_agent.id,
+            user_input=user_input
         )
-        # Set the specific fields after parent constructor
-        self.agent_id = target_agent.id
-        self.caller_agent_id = caller_agent.id
-        self.user_input = user_input
+        # Set private attributes after creation
+        object.__setattr__(instance, '_caller_agent', caller_agent)
+        object.__setattr__(instance, '_model', caller_agent.config.model)
+        object.__setattr__(instance, '_agent_id', caller_agent.id)
+        return instance
 
     def to_ui(self) -> 'UIAgentDelegateResponse':
         """Convert to UI response"""
-        return UIAgentDelegateResponse(self, self._model, self._agent_id)
+        _model = getattr(self, '_model', None)
+        _agent_id = getattr(self, '_agent_id', None)
+        if _model is None or _agent_id is None:
+            raise ValueError("AgentDelegateResponse not properly initialized - missing _model or _agent_id")
+        return UIAgentDelegateResponse(self, _model, _agent_id)
 
 class AgentCallResponse(StructuredResponse):
     agent_id: str
     caller_agent_id: str
     user_input: str
 
-    def __init__(self, target_agent: 'Agent', caller_agent: 'Agent', user_input: str, reasoning: str):
-        self._caller_agent = caller_agent
-        self._model = caller_agent.config.model
-        self._agent_id = caller_agent.id
-        super().__init__(
-            action=MessageType.AGENT_CALL.value,
-            reasoning=reasoning
+    @classmethod
+    def create(cls, agent: Union['Agent', str], caller_agent: Union['Agent', str], user_input: str, reasoning: str) -> 'AgentCallResponse':
+        """Factory method to create AgentCallResponse with proper initialization"""
+        # Ensure we have Agent instances
+        target_agent = ensure_agent_instance(agent)
+        caller_agent = ensure_agent_instance(caller_agent)
+        
+        instance = cls(
+            action=str(MessageType.AGENT_CALL.value),
+            reasoning=reasoning,
+            agent_id=target_agent.id,
+            caller_agent_id=caller_agent.id,
+            user_input=user_input
         )
-        # Set the specific fields after parent constructor
-        self.agent_id = target_agent.id
-        self.caller_agent_id = caller_agent.id
-        self.user_input = user_input
+        # Set private attributes after creation
+        object.__setattr__(instance, '_caller_agent', caller_agent)
+        object.__setattr__(instance, '_model', caller_agent.config.model)
+        object.__setattr__(instance, '_agent_id', caller_agent.id)
+        return instance
 
     def to_ui(self) -> 'UIAgentCallResponse':
         """Convert to UI response"""
-        return UIAgentCallResponse(self, self._model, self._agent_id)
+        _model = getattr(self, '_model', None)
+        _agent_id = getattr(self, '_agent_id', None)
+        if _model is None or _agent_id is None:
+            raise ValueError("AgentCallResponse not properly initialized - missing _model or _agent_id")
+        return UIAgentCallResponse(self, _model, _agent_id)
 
 class AgentReturnResponse(StructuredResponse):
     """Response from an agent call"""
@@ -193,22 +287,57 @@ class AgentReturnResponse(StructuredResponse):
     returning_agent: str
     success: str = Field(..., pattern="^(True|False)$")
 
-    def __init__(self, return_to_agent: 'Agent', returning_agent: 'Agent', is_success: bool, reasoning: str):
-        self._return_to_agent = return_to_agent
-        self._model = return_to_agent.config.model
-        self._agent_id = return_to_agent.id
-        super().__init__(
-            action=MessageType.AGENT_RETURN.value,
-            reasoning=reasoning
+    @classmethod
+    def create(cls, agent: Union['Agent', str], returning_agent: Union['Agent', str], success: bool, reasoning: str) -> 'AgentReturnResponse':
+        """Factory method to create AgentReturnResponse with proper initialization"""
+        # Ensure we have Agent instances
+        return_to_agent = ensure_agent_instance(agent)
+        returning_agent = ensure_agent_instance(returning_agent)
+        
+        instance = cls(
+            action=str(MessageType.AGENT_RETURN.value),
+            reasoning=reasoning,
+            agent=return_to_agent.id,
+            returning_agent=returning_agent.id,
+            success="True" if success else "False"
         )
-        # Set the specific fields after parent constructor
-        self.agent = return_to_agent.id
-        self.returning_agent = returning_agent.id
-        self.success = "True" if is_success else "False"
+        # Set private attributes after creation
+        object.__setattr__(instance, '_return_to_agent', return_to_agent)
+        object.__setattr__(instance, '_model', return_to_agent.config.model)
+        object.__setattr__(instance, '_agent_id', return_to_agent.id)
+        return instance
 
     def to_ui(self) -> 'UIAgentReturnResponse':
         """Convert to UI response"""
-        return UIAgentReturnResponse(self, self._model, self._agent_id)
+        _model = getattr(self, '_model', None)
+        _agent_id = getattr(self, '_agent_id', None)
+        if _model is None or _agent_id is None:
+            raise ValueError("AgentReturnResponse not properly initialized - missing _model or _agent_id")
+        return UIAgentReturnResponse(self, _model, _agent_id)
+
+class AgentOrchestrationFailedResponse(StructuredResponse):
+    """Response when agent orchestration fails (call/delegation)"""
+    operation_type: str  # "call" or "delegate"
+    target_agent_id: str
+    caller_agent_id: str
+    error_reason: str
+
+    @classmethod
+    def create(cls, operation_type: str, target_agent_id: str, caller_agent_id: str, error_reason: str, reasoning: str) -> 'AgentOrchestrationFailedResponse':
+        """Factory method to create AgentOrchestrationFailedResponse with proper initialization"""
+        instance = cls(
+            action=str(MessageType.AGENT_ORCHESTRATION_FAILED.value),
+            reasoning=reasoning,
+            operation_type=operation_type,
+            target_agent_id=target_agent_id,
+            caller_agent_id=caller_agent_id,
+            error_reason=error_reason
+        )
+        return instance
+
+    def to_ui(self) -> 'UIAgentOrchestrationFailedResponse':
+        """Convert to UI response"""
+        return UIAgentOrchestrationFailedResponse(self)
 
 class RefinementChecklist(BaseModel):
     objective: bool
@@ -356,8 +485,6 @@ class UIChatResponse(UILLMResponse):
             message_type=MessageType.CHAT_RESPONSE,
             metadata={
                 "model": model,
-                "agent_id": agent_id,
-                "action": chat_response.action,
             },
             action=chat_response.action,
             reasoning=chat_response.reasoning,
@@ -373,8 +500,6 @@ class UIErrorChatResponse(UILLMResponse):
             message_type=MessageType.ERROR,
             metadata={
                 "model": model,
-                "agent_id": agent_id,
-                "action": error_response.action,
             },
             action=error_response.action,
             reasoning=error_response.reasoning,
@@ -390,8 +515,6 @@ class UIToolCallResponse(UILLMResponse):
             message_type=MessageType.TOOL_CALL,
             metadata={
                 "model": model,
-                "agent_id": agent_id,
-                "action": tool_call.action,
                 "tool": tool_call.tool,
                 "args": tool_call.args,
             },
@@ -410,8 +533,6 @@ class UIToolReturnResponse(UILLMResponse):
             message_type=MessageType.TOOL_RETURN,
             metadata={
                 "model": model,
-                "agent_id": agent_id,
-                "action": tool_return.action,
                 "tool": tool_return.tool,
                 "success": tool_return.success,
             },
@@ -428,9 +549,6 @@ class UIAgentDelegateResponse(UILLMResponse):
             message_type=MessageType.AGENT_DELEGATE,
             metadata={
                 "model": model,
-                "agent_id": agent_id,
-                "action": agent_delegate.action,
-                "target_agent": agent_delegate.agent_id,
                 "caller_agent": agent_delegate.caller_agent_id,
             },
             action=agent_delegate.action,
@@ -447,9 +565,6 @@ class UIAgentCallResponse(UILLMResponse):
             message_type=MessageType.AGENT_CALL,
             metadata={
                 "model": model,
-                "agent_id": agent_id,
-                "action": agent_call.action,
-                "target_agent": agent_call.agent_id,
                 "caller_agent": agent_call.caller_agent_id,
             },
             action=agent_call.action,
@@ -462,18 +577,33 @@ class UIAgentReturnResponse(UILLMResponse):
     """UI wrapper for AgentReturnResponse"""
     def __init__(self, agent_return: AgentReturnResponse, model: str, agent_id: str):
         super().__init__(
-            content=f"Return from agent {agent_return.returning_agent}",
+            content=f"Return from agent {agent_return.agent_id}",
             message_type=MessageType.AGENT_RETURN,
             metadata={
                 "model": model,
-                "agent_id": agent_id,
-                "action": agent_return.action,
-                "returning_agent": agent_return.returning_agent,
-                "success": agent_return.success,
+                "caller_agent": agent_return.caller_agent_id,
             },
             action=agent_return.action,
             reasoning=agent_return.reasoning,
-            target_agent_id=agent_return.returning_agent
+            target_agent_id=agent_return.agent_id
+        )
+
+
+class UIAgentOrchestrationFailedResponse(UILLMResponse):
+    """UI wrapper for AgentOrchestrationFailedResponse"""
+    def __init__(self, orchestration_failed: AgentOrchestrationFailedResponse):
+        super().__init__(
+            content=f"Agent orchestration failed: {orchestration_failed.error_reason}",
+            message_type=MessageType.AGENT_ORCHESTRATION_FAILED,
+            metadata={
+                "action": orchestration_failed.action,
+                "operation_type": orchestration_failed.operation_type,
+                "target_agent_id": orchestration_failed.target_agent_id,
+                "caller_agent_id": orchestration_failed.caller_agent_id,
+                "error_reason": orchestration_failed.error_reason,
+            },
+            action=orchestration_failed.action,
+            reasoning=orchestration_failed.reasoning
         )
 
 
@@ -772,6 +902,6 @@ class MessageHistory:
 
 # Type alias for all structured response types
 StructuredResponseType = Union[ChatResponse, ErrorChatResponse, ToolCallResponse, ToolReturnResponse, 
-                              AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, RefinementResponse]
+                              AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, AgentOrchestrationFailedResponse, RefinementResponse]
 
  

@@ -32,10 +32,14 @@ agents:
   - plan_list
   updated_at: '2025-08-11T20:49:56.896756'
 - created_at: null
-  description: |
-    Coorginator agent is MetaFFI agent system frontdesk agent.
+  description: 'Coorginator agent is MetaFFI agent system frontdesk agent.
+
     Coordinator agent can answer high-level questions about MetaFFI system,
-    and call or delegate other agents to perform tasks or answer questions it cannot perform.
+
+    and call or delegate other agents to perform tasks or answer questions it cannot
+    perform.
+
+    '
   enable_scratchpad: true
   enable_summarization: true
   grammar_file: null
@@ -64,7 +68,8 @@ agents:
   - plan_list
   updated_at: '2025-08-11T19:25:33.464875'
 - created_at: null
-  description: Builds and runs tests for the entire MetaFFI system with concise results and logs
+  description: Builds and runs tests for the entire MetaFFI system with concise results
+    and logs
   enable_scratchpad: true
   enable_summarization: true
   grammar_file: null
@@ -81,7 +86,6 @@ agents:
   schema_file: null
   temperature: 0.3
   tools:
-  - append_knowledgebase
   - kb_add
   - kb_update
   - kb_get
@@ -92,4 +96,4 @@ agents:
   - plan_append
   - plan_delete
   - plan_list
-  updated_at: null
+  updated_at: '2025-08-18T10:27:34.326535'
