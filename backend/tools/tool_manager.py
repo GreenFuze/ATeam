@@ -6,10 +6,10 @@ from schemas import ToolConfig
 import json
 import ast
 from notification_utils import log_error, log_warning, log_info
-from tool_descriptor import get_tool_prompt_for_agent
+from tools.tool_descriptor import get_tool_prompt_for_agent
 
 class ToolManager:
-    def __init__(self, tools_dir: str = "tools"):
+    def __init__(self, tools_dir: str = "tools/tools"):
         self.tools_dir = tools_dir
         self.tools: Dict[str, Any] = {}
         self.discover_tools()
@@ -17,8 +17,7 @@ class ToolManager:
     def discover_tools(self):
         """Discover tools from Python files in the tools directory"""
         if not os.path.exists(self.tools_dir):
-            log_warning("ToolManager", f"Tools directory {self.tools_dir} not found", {"tools_dir": self.tools_dir})
-            return
+            raise FileNotFoundError(f"Tools directory {self.tools_dir} not found")
             
         # Get the absolute path of the tools directory
         tools_abs_path = os.path.abspath(self.tools_dir)

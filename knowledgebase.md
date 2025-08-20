@@ -266,13 +266,6 @@ ATeam is a multi-agent system with a React frontend and Python backend, featurin
 - **ToolRunner Refactoring**: Refactored tool execution to use `ToolRunner` class that encapsulates tool execution within agent context. Each `Agent` instance now has its own `ToolRunner` instance (`self._tool_runner`) initialized in the constructor. Tool calls now use `self._tool_runner.run_tool()` instead of the global `run_tool()` function. This properly enforces the fail-fast policy by requiring agent context at construction time and eliminates the need for optional agent parameters.
 - **ToolReturnResponse Boolean Success**: Improved type safety in `ToolReturnResponse` constructor by changing `success` parameter from `str` to `bool`. The constructor now converts the boolean to string internally (`"True"` or `"False"`) to maintain the required string format for the field while providing better type safety at the API level. Updated all call sites in `agent.py` and `tool_executor.py` to pass boolean values instead of strings.
 - **ToolManager Cleanup**: Removed redundant `execute_tool` method from `ToolManager` class as it was duplicating functionality now properly handled by the `ToolRunner` class. This eliminates the linter error and removes unnecessary code duplication.
-- **Tool Call Announcement System**: Implemented a "waiting for tool" state similar to agent call announcements. When a tool is called, the UI now shows "Agent is waiting for tool X to complete" and blocks user input. The system includes:
-  - **Backend Implementation**: Added `tool_call_announcement` method to `FrontendAPI._SingleAgentSender` with proper data structure (`_ToolCallAnnouncementData`)
-  - **Frontend Handler**: Added `onToolCallAnnouncement` handler in `FrontendAPIService` and `AgentChat` component
-  - **UI Blocking**: Tool call announcements create system messages with `isToolWaiting: true` metadata to block user input
-  - **Future-Proof Design**: The announcement system is separate from tool execution, ensuring no conflicts when tools update the UI directly in the future
-  - **Automatic Release**: Tool returns automatically release the blocking state through the existing `TOOL_RETURN` message flow
-  - **Clean API Design**: Refactored to use single `tool_call_announcement(tool_response, context_usage)` call that internally handles both announcement and tool call details, eliminating code duplication and tight coupling
 - Conversation Save/Load (history/): end-to-end UI; backend persists to `./history/<agent_id>/<session_id>.json` and returns `conversation_list`/`conversation_snapshot`.
 - Fail-fast tool events: always emit `TOOL_CALL`/`TOOL_RETURN`; errors surface to UI (no fallbacks).
 - Structured logging: log raw inbound frontend JSON, raw LLM responses, and final outbound responses; stream deltas suppressed; `backend/ateam.log` overwrites on start.
@@ -1629,176 +1622,156 @@ The agent settings dialog has been enhanced with a new draggable system prompts 
 
 ## File Structure Summary
 
-```
-ATeam/
-├── backend/
-│   ├── main.py                 # FastAPI application with frontend serving
-│   ├── manager_registry.py     # Global manager registry with centralized initialization
-│   ├── agent_manager.py        # Agent management (fixed delete path issue)
-│   ├── tool_manager.py         # Dynamic tool discovery and signature extraction
-│   ├── models_manager.py       # Dynamic model discovery and settings
-│   ├── schema_manager.py       # JSON schema CRUD operations
-│   ├── provider_manager.py     # LLM provider management with strict typing
-│   ├── prompt_manager.py       # Prompt management (fail fast implementation)
-│   ├── notification_manager.py # WebSocket-based notification broadcasting
-│   ├── notification_utils.py   # Utility functions for structured logging
-│   ├── chat_engine.py          # Chat processing logic with context window tracking
-│   ├── monitoring.py           # System monitoring
-│   ├── models.yaml             # Model configurations (complete OpenAI coverage)
-│   ├── agents.yaml             # Agent configurations
-│   ├── providers.yaml          # Provider definitions (no models)
-│   ├── prompts/                # Prompt templates
-│   ├── schemas/                # JSON schema files
-│   └── tools/                  # Python tool files (dynamically discovered)
-├── frontend/
-│   ├── src/components/         # React components
-│   ├── src/api/index.ts        # API client
-│   └── package.json            # Dependencies
-├── build_and_run.ps1           # Single development server script
-├── requirements.txt            # Python dependencies
-└── README.md                   # Project documentation
-``` 
+### ✅ KB Delete Functionality Implementation (Latest Update)
+- **Problem**: The knowledgebase system was missing the "Delete" operation in the CRUD pattern, only providing Add, Update, Get, List, and Search operations.
+- **Root Cause**: `kb_manager.py` had no `delete` method for KB items, and `prompts_and_knowledge.py` had no corresponding tool function.
+- **Solution**: 
+  - **Backend Implementation**: Added `delete()` method to `KBManager` class that:
+    - Validates `caller_agent_id` for security (agents can only delete their own KB items)
+    - Checks if the item exists before attempting deletion
+    - Uses ChromaDB's `delete(ids=[item_id])` method to remove the item
+    - Provides proper error handling and logging
+  - **Tool Function**: Added `kb_delete(item_id: str, caller_agent_id: Optional[str] = None) -> str` function to `prompts_and_knowledge.py` that:
+    - Follows the same pattern as other KB tool functions
+    - Automatically injects `caller_agent_id` via `tool_executor.py`
+    - Returns "OK" on successful deletion
+    - Includes comprehensive docstring explaining behavior
+- **Benefits**:
+  - ✅ **Complete CRUD Operations**: Agents now have full Create, Read, Update, Delete capabilities for their knowledgebase
+  - ✅ **Data Management**: Agents can clean up outdated or incorrect information
+  - ✅ **Security**: Proper authorization ensures agents can only delete their own KB items
+  - ✅ **Error Handling**: Fails gracefully if item doesn't exist
+  - ✅ **Consistent API**: Follows the same patterns as other KB operations
+- **Usage**: Agents can now call `kb_delete(item_id)` to permanently remove KB items from their knowledgebase
 
-## Strict Typing Architecture
+### ✅ LLM Auto-Recovery for Invalid Actions (Latest Update)
+- **Problem**: When the LLM generated invalid actions (like `"get_all_agents_descriptions"` which is not in the allowed actions list), the system was sending error messages to the frontend instead of giving the LLM a chance to recover.
+- **Root Cause**: `ErrorChatResponse` was being created for invalid actions but had no handler in `_handle_structured_response`, so it was falling through to the default case and causing errors.
+- **Solution**: 
+  - Added `ErrorChatResponse` handler in `_handle_structured_response` method
+  - **Critical Fix**: Reordered `isinstance` checks to put `ErrorChatResponse` before `ChatResponse` since `ErrorChatResponse` inherits from `ChatResponse`
+  - Implemented `_handle_error_response()` method that:
+    1. Sends the error to the UI first (so user sees what went wrong)
+    2. Feeds the error back to the LLM with recovery instructions
+    3. Uses `LLMAutoReplyPrompts.RECOVERY_INSTRUCTION` to guide the LLM
+  - The LLM now receives feedback like: "Error: 'action' field with the value 'GET_ALL_AGENTS_DESCRIPTIONS' is unknown. Please either try again with correct parameters or use CHAT_RESPONSE_WAIT_USER_INPUT to ask the user for help."
+- **Benefits**:
+  - ✅ **Self-Correcting System**: LLM can recover from its own mistakes
+  - ✅ **Better User Experience**: Users see the error but the system continues working
+  - ✅ **Reduced Manual Intervention**: System automatically handles invalid actions
+  - ✅ **Learning Opportunity**: LLM learns from its mistakes and improves responses
+- **Architecture**: Follows the existing LLM auto-recovery pattern used for tool not found errors
 
-### Provider Data Flow
-1. **YAML Configuration**: `ProviderInfo` objects loaded from `providers.yaml`
-2. **Runtime Discovery**: `discover_providers_from_llm()` returns dictionary data
-3. **Merging**: `get_all_providers_with_discovery()` creates `ProviderInfoView` objects
-4. **API Response**: `ProviderInfoView` objects serialized to JSON for frontend
-5. **Frontend**: TypeScript interfaces match backend Pydantic models
+### ✅ GPT-5 Models Addition and Agent Model Updates (Latest Update)
+- **Problem**: Need to add the latest GPT-5 models to the system and update agents to use the most recent model.
+- **Solution**: 
+  - **Models Added**: Added three new GPT-5 models to `models.yaml`:
+    - `gpt-5`: Full GPT-5 model with 400,000 context window and 128,000 max output tokens
+    - `gpt-5-mini`: GPT-5 mini model with 400,000 context window and 128,000 max output tokens
+    - `gpt-5-nano`: GPT-5 nano model with 400,000 context window and 128,000 max output tokens
+  - **Agent Updates**: Updated all agents in `agents.yaml` to use `gpt-5-nano`:
+    - **Zeus**: Updated from `gpt-4.1-nano` to `gpt-5-nano`
+    - **Coordinator**: Updated from `gpt-4.1-nano` to `gpt-5-nano`
+    - **System Builder and Tester**: Updated from `gpt-4.1-nano` to `gpt-5-nano`
+- **Benefits**:
+  - ✅ **Latest Models**: Access to the newest GPT-5 models with improved capabilities
+  - ✅ **Massive Context**: 400,000 token context window (vs 1M for GPT-4.1, but more efficient)
+  - ✅ **Large Output**: 128,000 max output tokens for comprehensive responses
+  - ✅ **Better Performance**: GPT-5 models are more efficient and capable than GPT-4.1
+  - ✅ **Consistent Configuration**: All agents now use the same modern model
+- **Technical Details**:
+  - **Context Window**: 400,000 tokens (vs 1,047,576 for GPT-4.1, but more efficient processing)
+  - **Max Output Tokens**: 128,000 tokens (vs 32,768 for GPT-4.1)
+  - **Streaming**: All models support streaming for real-time responses
+  - **Provider**: All models use OpenAI provider
 
-### Model Data Flow
-1. **YAML Configuration**: `ModelInfo` objects loaded from `models.yaml`
-2. **Runtime Discovery**: `discover_models_from_llm()` returns dictionary data
-3. **Schema Extraction**: `get_provider_model_schema()` extracts inference settings
-4. **Merging**: `get_all_models_with_discovery()` creates `ModelInfoView` objects
-5. **API Response**: `ModelInfoView` objects serialized to JSON for frontend
-6. **Frontend**: Dynamic forms based on `available_settings` schema
+### ✅ Efficient Timestamp-Based Message Sorting (Latest Update)
+- **Problem**: Messages in the frontend chat window were not guaranteed to be displayed in chronological order, especially when messages arrived out of order or when loading from cache.
+- **Root Cause**: Messages were simply appended to arrays without considering their timestamps, leading to potential display order issues.
+- **Solution**: 
+  - **Efficient Insertion Sort**: Implemented binary search-based insertion sort for new messages
+  - **Optimized Performance**: Most common case (new message has later timestamp) is O(1) append
+  - **Binary Search**: For out-of-order messages, uses O(log n) binary search to find correct position
+  - **Consistent Sorting**: Both UI state and cache maintain timestamp-sorted order
+  - **Cache Integration**: ConnectionManager also maintains sorted message cache
+- **Technical Implementation**:
+  - **`insertMessageInOrder()`**: Binary search-based insertion with O(log n) complexity for out-of-order messages
+  - **`addMessageWithSorting()`**: Wrapper function that handles duplicates and calls insertion sort
+  - **`setMessagesWithSorting()`**: Helper for bulk message loading with timestamp sorting
+  - **Optimization Cases**:
+    - **Append Case**: If new message timestamp ≥ last message timestamp → O(1) append
+    - **Prepend Case**: If new message timestamp ≤ first message timestamp → O(1) prepend
+    - **Insert Case**: Otherwise → O(log n) binary search + O(n) insertion
+- **Benefits**:
+  - ✅ **Correct Chronological Order**: Messages always displayed in timestamp order
+  - ✅ **Efficient Performance**: O(1) for most cases, O(log n) for out-of-order messages
+  - ✅ **Consistent Behavior**: Both real-time messages and cached messages maintain order
+  - ✅ **No Full Sorting**: Never sorts entire message array, only inserts new messages
+  - ✅ **Handles Edge Cases**: Properly handles messages with same timestamps
+  - ✅ **Cache Consistency**: ConnectionManager cache also maintains sorted order
+- **Performance Characteristics**:
+  - **Best Case**: O(1) for messages arriving in chronological order (most common)
+  - **Average Case**: O(log n) for occasional out-of-order messages
+  - **Worst Case**: O(n) for messages that need to be inserted in the middle
+  - **Memory**: No additional memory overhead, in-place insertion
 
-### Type Safety Benefits
-- **Compile-time Validation**: Pydantic validates data on object creation
-- **IDE Support**: Full autocomplete and type checking
-- **Error Prevention**: Runtime errors caught at creation time
-- **Clear Data Flow**: Explicit separation between configuration and runtime data
-- **Maintainability**: Changes to data structures caught early
+### ✅ Backend Timestamp Generation for All UILLMResponse Messages (Latest Update)
 
-### Key Classes
-- **ProviderInfo**: Configuration data stored in YAML (name, display_name, description, api_key_required, api_key_env_var, base_url)
-- **ProviderInfoView**: Complete provider data including runtime fields (configured, chat_models, embedding_models)
-- **ModelInfo**: Configuration data stored in YAML (id, name, provider, description, context_window_size, model_settings, default_inference)
-- **ModelInfoView**: Complete model data including runtime fields (configured, supports_schema, can_stream, available_settings, embedding_model, badges)
+### ✅ Copy to Clipboard Functionality for All Message Displays (Latest Update)
+- **Problem**: Users needed a way to easily copy message content from the chat interface for external use or reference.
+- **Root Cause**: No built-in copy functionality in the message display components.
+- **Solution**: 
+  - **Base Class Integration**: Added copy functionality to `BaseMessageDisplay` component affecting all message types
+  - **Display Mode Aware**: Copy functionality respects the current display mode (markdown, text, raw)
+  - **Smart Content Handling**: Automatically parses JSON content to copy the actual message content
+  - **User Feedback**: Mantine notifications provide clear success/error feedback
+  - **Browser Compatibility**: Includes fallback method for older browsers
+- **Technical Implementation**:
+  - **`copyToClipboard()` Method**: Async method that handles clipboard operations
+  - **Display Mode Logic**: 
+    - **Raw Mode**: Copies full JSON structure with all message metadata
+    - **Markdown/Text Mode**: Copies parsed content (handles JSON parsing automatically)
+  - **Modern Clipboard API**: Uses `navigator.clipboard.writeText()` for modern browsers
+  - **Fallback Support**: Uses `document.execCommand('copy')` for older browsers
+  - **User Notifications**: Success/error notifications with appropriate colors and auto-close
+- **Menu Integration**:
+  - **Copy Menu Item**: Added to the message options menu (three dots)
+  - **Icon**: Uses `IconCopy` from Tabler icons
+  - **Positioning**: Placed after display mode options, before reasoning toggle
+  - **Visibility**: Only visible when hovering over message (consistent with other menu items)
+- **Benefits**:
+  - ✅ **Universal Access**: Available on all message types (user, agent, system, tool calls, etc.)
+  - ✅ **Display Mode Respect**: Copies content as it appears to the user
+  - ✅ **Smart Content Parsing**: Automatically handles JSON-wrapped content
+  - ✅ **User Feedback**: Clear notifications for success/failure
+  - ✅ **Browser Compatibility**: Works across all modern and legacy browsers
+  - ✅ **Consistent UX**: Follows existing menu patterns and hover behavior
+- **Usage**:
+  - **Hover over any message** to reveal the options menu (three dots)
+  - **Click "Copy Content"** to copy the message content to clipboard
+  - **Receive notification** confirming successful copy or error
+  - **Content copied** respects current display mode (markdown, text, or raw JSON)
 
-### Data Separation
-- **Configuration Data**: Stored in YAML files (static)
-- **Runtime Data**: Determined at runtime (model counts, configured flags, capabilities)
-- **Schema Data**: Extracted from provider Options classes (inference settings)
-- **Clean Persistence**: Only configuration data saved to YAML, runtime data computed fresh
+### ✅ Efficient Timestamp-Based Message Sorting (Latest Update)
 
-## Current System State
+### ✅ Tool Message Display Font Improvements (Latest Update)
+- **Problem**: JSON content in tool call and tool return messages was displayed in the default font, making it difficult to read structured data.
+- **Root Cause**: `JSON.stringify()` output in tool message displays used the default font instead of a monospace font.
+- **Solution**: 
+  - **Consolas Font**: Applied Consolas font to JSON stringified content in tool messages
+  - **Fallback Support**: Added Courier New as fallback font for systems without Consolas
+  - **Monospace Fallback**: Added generic monospace as final fallback
+  - **Consistent Styling**: Applied same font styling to both tool call parameters and tool return results
+- **Technical Implementation**:
+  - **ToolCallMessageDisplay**: Updated `message.tool_parameters` display with monospace font
+  - **ToolReturnMessageDisplay**: Updated `message.tool_result` display with monospace font
+  - **Font Stack**: `Consolas, "Courier New", monospace` for optimal readability
+  - **Inline Styling**: Applied via `fontFamily` style property for immediate effect
+- **Benefits**:
+  - ✅ **Better Readability**: JSON content is now displayed in a monospace font for easier reading
+  - ✅ **Consistent Formatting**: All JSON data in tool messages uses the same font family
+  - ✅ **Professional Appearance**: Monospace fonts are standard for displaying structured data
+  - ✅ **Cross-Platform**: Font stack ensures consistent display across different operating systems
+  - ✅ **Fallback Support**: Multiple font options ensure display even on systems without Consolas
 
-### Models and Providers
-- **29 Chat Models**: Discovered from llm package with dynamic capabilities
-- **8 Embedding Models**: Separate group with embedding-specific badges
-- **29 Configured Models**: All chat models have context window sizes set
-- **0 Unconfigured Providers**: All providers properly configured (no notifications)
-
-### Features Working
-- ✅ Dynamic model discovery without loading models
-- ✅ Enhanced model settings with proper field types
-- ✅ Context window progress tracking with N/A state
-- ✅ Global notification system with health checks
-- ✅ Schema management with full CRUD operations
-- ✅ Separate model groups for better organization
-- ✅ Comprehensive badge system for model capabilities
-- ✅ Type-safe data handling throughout the system
-- ✅ Real-time context usage calculation
-- ✅ Streaming toggle functionality
-- ✅ Proper type conversion in forms
-- ✅ Model warning icons for configuration issues
-- ✅ Complete OpenAI model configuration
-- ✅ Enhanced prompt management with full CRUD operations
-- ✅ Dynamic textarea sizing (8-50 rows) with autosize functionality
-- ✅ Context-aware menu options for prompt editing
-- ✅ Large modal dialogs (95% max height) for extensive content
-- ✅ Specialized editing interfaces for system and seed prompts
-- ✅ JSON-based seed prompt storage with markdown fallback
-- ✅ WebSocket connection architecture with reliable message delivery
-- ✅ Session creation and management with proper loading states
-- ✅ Real-time chat functionality with agent responses
-- ✅ Agent management tools for Zeus agent
-- ✅ Content persistence and synchronization across prompt switches
-- ✅ Frontend message display fixes with proper type recognition and clean UI defaults
-- ✅ Dynamic tool discovery from Python files
-- ✅ Complete function and method signature extraction
-- ✅ Tool signature display across all interfaces
-- ✅ Expandable class methods with individual signatures
-- ✅ Docstring integration with warning indicators
-- ✅ Method expansion with chevron controls
-- ✅ Monospace font styling for signatures
-- ✅ Drag-and-drop system prompts with proper dependency management
-- ✅ Complete TypeScript compilation and production build
-- ✅ Strict Pydantic schemas replacing all dictionary usage
-- ✅ Context progress tooltips with detailed token information
-- ✅ Console-only logging without file output
-- ✅ Agent class with llm package integration
-- ✅ Conversation persistence in agent_history directory
-- ✅ Lazy loading agent instances for memory efficiency
-- ✅ WebSocket-based real-time communication with centralized connection management
-- ✅ Custom conversation management without LLM package conversation object bias
-- ✅ Structured LLM responses with Pydantic validation and type safety
-- ✅ Custom tool descriptor and executor system
-- ✅ Comprehensive code cleanup with no unused dependencies
-- ✅ Fail-fast error handling throughout all components
-
-### System Health
-- **0 Warnings**: All providers and models properly configured
-- **All APIs Working**: Models, providers, schemas, agents, tools
-- **Frontend Responsive**: All components working correctly
-- **Type Safety**: No type errors in development with strict Pydantic schemas
-- **Complete Configuration**: All 29 OpenAI chat models configured with accurate specifications
-- **Dynamic Tools**: 2 tools discovered and displaying signatures correctly
-- **Clean Logging**: Console-only logging without file clutter
-- **Agent Integration**: New Agent class with llm package integration working correctly
-- **Conversation Persistence**: Agent history system ready for conversation storage
-- **Memory Efficient**: Lazy loading agent instances for optimal resource usage
-- **Notification System**: Real-time error/warning notifications with detailed dialogs
-- **Structured Logging**: All backend errors and warnings properly logged with context
-- **Global Notification System**: Real-time WebSocket-based error/warning notifications with detailed dialogs
-- **Structured Error Logging**: All backend print statements replaced with context-rich notification logging
-- **Professional Error Handling**: Comprehensive error reporting with detailed context information
-- **Fail-Fast Architecture**: System immediately stops on errors instead of continuing in invalid state
-- **Exception Propagation**: All errors properly raised and handled with appropriate HTTP status codes
-- **No Silent Failures**: Application never continues running with missing or invalid resources
-
-The LLM model management system is now complete with all requested features implemented and working! The comprehensive error handling system ensures the application never continues running in an invalid state, while the notification system provides real-time error/warning visibility. The global manager registry pattern provides centralized manager management with no local copies, ensuring all components always access current manager instances. The fail-fast architecture dramatically improves the debugging experience for users and developers alike - no more hidden errors in console output, everything is immediately visible and actionable! 🎉 
-
-### ✅ Agent Orchestration Architecture Refactoring (Latest Update)
-- **Backend Announcement System Removal**: Completely removed `_DualAgentSender` class and announcement methods (`delegation_announcement`, `agent_call_announcement`) from `frontend_api.py`
-- **Direct Agent Response Flow**: AGENT_DELEGATE, AGENT_CALL, and AGENT_RETURN now sent as regular agent responses directly to both agents involved
-- **Backend State Management**: User input control (enable/disable) is managed by backend, not frontend
-- **Frontend Display Only**: Frontend only handles message display with badges and reasoning, no orchestration logic
-- **Message Display**: Added custom badges ("AGENT_DELEGATE", "AGENT_CALL", "AGENT_RETURN") and reasoning field display
-- **Agent-Specific Messages**: Fixed delegation and call messages to show different content for each agent:
-  - **Delegating Agent**: "Delegating to [target_agent]" 
-  - **Delegated Agent**: "Delegated by [caller_agent] agent"
-  - **Calling Agent**: "Calling [target_agent]"
-  - **Called Agent**: "Called by [caller_agent] agent"
-- **Component Inheritance Architecture**: Completely refactored MessageDisplay into inheritance hierarchy:
-  - **Base Components**: `BaseMessageDisplay`, `ToolBaseMessageDisplay`, `AgentOrchestrationBaseMessageDisplay`
-  - **Specific Components**: `ToolCallMessageDisplay`, `ToolReturnMessageDisplay`, `DelegatingAgentMessageDisplay`, `DelegatedAgentMessageDisplay`, etc.
-  - **Factory Pattern**: `MessageDisplayFactory` intelligently selects correct component based on message type
-  - **Benefits**: Single responsibility, maintainability, extensibility, type safety, testability
-- **Old Component Removal**: Deleted monolithic `MessageDisplay.tsx` and replaced with factory-based architecture
-- **Agent Information Cache System**: Implemented centralized agent information management:
-  - **AgentInfoService**: System-wide cache for agent information with permanent caching (agent info is static)
-  - **Fail-Fast Agent Name Loading**: Components fetch agent info from backend when not cached, no fallbacks
-  - **Proper Error Handling**: Components show error messages when agent info cannot be loaded
-  - **Cache Management**: Methods to clear cache for specific agents or entire cache
-  - **Lazy Loading**: Agent info only fetched when actually needed by components
-- **Architecture Benefits**:
-  - ✅ **Simplified Backend**: No complex announcement system, direct agent-to-agent communication
-  - ✅ **Proper Separation**: Backend manages orchestration state, frontend handles display only
-  - ✅ **Better Message Flow**: Actual agent responses appear before any waiting states
-  - ✅ **Type Safety**: Proper message type handling with badges and reasoning display
-  - ✅ **Component Architecture**: Clean inheritance hierarchy with factory pattern
+### ✅ Copy to Clipboard Functionality for All Message Displays (Latest Update)

@@ -157,7 +157,10 @@ class ToolRunner:
             bound_args = {}
             
             for param_name, param in sig.parameters.items():
-                if param_name in args:
+                if param_name == "caller_agent_id":
+                    # Automatically inject the calling agent's ID
+                    bound_args[param_name] = self.agent.id
+                elif param_name in args:
                     # Convert value to proper type based on annotation
                     value = args[param_name]
                     if param.annotation != inspect.Parameter.empty:

@@ -3,9 +3,11 @@ import {
   Box, Text, Group, ActionIcon, Tooltip, Menu,
   Paper, Textarea, Button, Divider, Checkbox
 } from '@mantine/core';
+import { notifications } from '@mantine/notifications';
 import {
   IconDotsVertical, IconFileText, IconMarkdown,
-  IconEdit, IconCode, IconChevronDown, IconChevronRight
+  IconEdit, IconCode, IconChevronDown, IconChevronRight,
+  IconCopy
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { BaseMessageDisplayProps, DisplayMode } from './types';
@@ -109,6 +111,83 @@ export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisp
     });
     if (this.props.onCancel) {
       this.props.onCancel();
+    }
+  };
+
+  copyToClipboard = async () => {
+    try {
+      // Get the content to copy based on display mode
+      let contentToCopy = this.props.message.content;
+      
+      if (this.state.displayMode === 'raw') {
+        // For raw mode, copy the full JSON structure
+        const rawData = {
+          content: this.props.message.content,
+          action: this.props.message.action,
+          reasoning: this.props.message.reasoning,
+          tool_name: this.props.message.tool_name,
+          tool_parameters: this.props.message.tool_parameters,
+          target_agent_id: this.props.message.target_agent_id,
+          message_type: this.props.message.message_type,
+          metadata: this.props.message.metadata
+        };
+        contentToCopy = JSON.stringify(rawData, null, 2);
+      } else {
+        // For markdown and text modes, handle JSON content parsing like renderMessageContent does
+        if (contentToCopy.startsWith('{') && contentToCopy.endsWith('}')) {
+          try {
+            const parsed = JSON.parse(contentToCopy);
+            if (parsed.content) {
+              contentToCopy = parsed.content;
+            }
+          } catch (e) {
+            // If parsing fails, use original content
+          }
+        }
+        
+        // For markdown mode, copy the parsed content (which may contain markdown)
+        // For text mode, copy the parsed content as plain text
+        // Both cases use the same contentToCopy variable
+      }
+      
+      await navigator.clipboard.writeText(contentToCopy);
+      
+      // Show success notification
+      notifications.show({
+        title: 'Content Copied',
+        message: 'Message content has been copied to clipboard',
+        color: 'green',
+        autoClose: 2000
+      });
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      // Fallback for older browsers or when clipboard API is not available
+      try {
+        const textArea = document.createElement('textarea');
+        textArea.value = this.props.message.content;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        
+        // Show success notification for fallback method
+        notifications.show({
+          title: 'Content Copied',
+          message: 'Message content has been copied to clipboard',
+          color: 'green',
+          autoClose: 2000
+        });
+      } catch (fallbackError) {
+        console.error('Failed to copy to clipboard (fallback method):', fallbackError);
+        
+        // Show error notification
+        notifications.show({
+          title: 'Copy Failed',
+          message: 'Failed to copy content to clipboard',
+          color: 'red',
+          autoClose: 3000
+        });
+      }
     }
   };
 
@@ -332,6 +411,16 @@ export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisp
                 )}
                 
                 <Divider my="xs" />
+                
+                <Menu.Item
+                  leftSection={<IconCopy size={14} />}
+                  onClick={this.copyToClipboard}
+                  style={{ 
+                    backgroundColor: 'var(--mantine-color-blue-0)' 
+                  }}
+                >
+                  Copy Content
+                </Menu.Item>
                 
                 <Menu.Item>
                   <Checkbox

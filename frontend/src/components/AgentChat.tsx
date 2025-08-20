@@ -37,6 +37,68 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   const initialAutoScrollPendingRef = useRef<boolean>(false);
   const atBottomRef = useRef<boolean>(true);
 
+  // Helper function to insert a message in timestamp-sorted order
+  const insertMessageInOrder = (currentMessages: Message[], newMessage: Message): Message[] => {
+    // If the new message has a timestamp later than the last message, append it (most common case)
+    if (currentMessages.length === 0 || newMessage.timestamp >= currentMessages[currentMessages.length - 1].timestamp) {
+      return [...currentMessages, newMessage];
+    }
+    
+    // If the new message has a timestamp earlier than the first message, prepend it
+    if (newMessage.timestamp <= currentMessages[0].timestamp) {
+      return [newMessage, ...currentMessages];
+    }
+    
+    // Otherwise, find the correct insertion position using binary search
+    let left = 0;
+    let right = currentMessages.length - 1;
+    
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      const midTimestamp = currentMessages[mid].timestamp;
+      
+      if (newMessage.timestamp === midTimestamp) {
+        // Insert after messages with the same timestamp
+        return [
+          ...currentMessages.slice(0, mid + 1),
+          newMessage,
+          ...currentMessages.slice(mid + 1)
+        ];
+      } else if (newMessage.timestamp < midTimestamp) {
+        right = mid - 1;
+      } else {
+        left = mid + 1;
+      }
+    }
+    
+    // Insert at the found position
+    return [
+      ...currentMessages.slice(0, left),
+      newMessage,
+      ...currentMessages.slice(left)
+    ];
+  };
+
+  // Helper function to add a message with proper sorting
+  const addMessageWithSorting = (newMessage: Message) => {
+    setMessages(prev => {
+      // Check if message already exists to avoid duplicates
+      if (prev.some(m => m.id === newMessage.id)) {
+        return prev;
+      }
+      
+      // Insert in timestamp order
+      return insertMessageInOrder(prev, newMessage);
+    });
+  };
+
+  // Helper function to set messages with proper sorting
+  const setMessagesWithSorting = (newMessages: Message[]) => {
+    // Sort messages by timestamp to ensure correct order
+    const sortedMessages = [...newMessages].sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    setMessages(sortedMessages);
+  };
+
   useEffect(() => {
     if (agentId) {
       // Reset UI state on agent switch to avoid showing previous agent messages
@@ -57,7 +119,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
       if (cachedSession) {
         setSessionId(cachedSession);
         const cachedMessages = connectionManager.getMessages(agentId);
-        setMessages(cachedMessages); // may be empty; ensures we clear prior agent's messages
+        setMessagesWithSorting(cachedMessages); // may be empty; ensures we clear prior agent's messages
         if (!cachedMessages || cachedMessages.length === 0) {
           initialAutoScrollPendingRef.current = true;
         }
@@ -152,7 +214,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             metadata: message.metadata || {},
           };
           
-          setMessages(prev => [...prev, systemMessage]);
+          addMessageWithSorting(systemMessage);
           connectionManager.appendMessage(agentId, systemMessage);
           if (initialAutoScrollPendingRef.current) {
             autoScrollAllowedRef.current = true;
@@ -165,24 +227,6 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             return;
           }
           
-          // Create a waiting message to show in the chat
-          const waitingMessage: Message = {
-            id: `tool-waiting-${Date.now()}`,
-            agent_id: agentId,
-            content: message.reasoning || "Agent is waiting for a tool to complete...",
-            message_type: MessageType.SYSTEM,
-            timestamp: message.timestamp || new Date().toISOString(),
-            metadata: { 
-              ...(message.metadata || {}), 
-              isWaiting: true,
-              isToolWaiting: true,
-              toolName: message.tool_name,
-              agent: message.metadata?.agent
-            },
-          };
-          
-          setMessages(prev => [...prev, waitingMessage]);
-          connectionManager.appendMessage(agentId, waitingMessage);
           
           // Auto-scroll to show the waiting message
           if (atBottomRef.current) {
@@ -272,10 +316,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             target_agent_id: data.target_agent_id,
           };
           
-          setMessages(prev => {
-            if (prev.some(m => m.id === agentMessage.id)) return prev;
-            return [...prev, agentMessage];
-          });
+          addMessageWithSorting(agentMessage);
           connectionManager.appendMessage(agentId, agentMessage);
           
           // Auto-scroll to show the new message
@@ -283,6 +324,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             scrollToBottom();
           }
         },
+		
         onAgentStream: (_agentId: string, _sessionId: string, data: { delta: string; message_id?: string; action?: string }) => {
           if (_agentId !== agentId) return; // Stream only for active agent UI
           if (!data || typeof data.delta !== 'string') {
@@ -327,7 +369,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
               timestamp: new Date().toISOString(),
               metadata: { streaming: true },
             };
-            setMessages(prev => [...prev, streamingMsg]);
+            addMessageWithSorting(streamingMsg);
             return;
           }
 
@@ -354,7 +396,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
               timestamp: new Date().toISOString(),
               metadata: { streaming: true },
             };
-            setMessages(prev => [...prev, streamingMsg]);
+            addMessageWithSorting(streamingMsg);
             streamBufferRef.current = "";
           } else {
             const currentId = streamingMessageIdRef.current;
@@ -410,7 +452,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             timestamp: data.timestamp || new Date().toISOString(),
             metadata: { ...(data.metadata || {}), agent_name: data.agent_name },
           };
-          setMessages(prev => [...prev, seedMessage]);
+          addMessageWithSorting(seedMessage);
           connectionManager.appendMessage(agentId, seedMessage);
         },
         onError: (_agentId: string, _sessionId: string, error: any) => {
@@ -458,10 +500,14 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             action: m.action,
             reasoning: m.reasoning,
           }));
-          setMessages(msgs);
+          
+          // Sort messages by timestamp to ensure correct order
+          const sortedMsgs = msgs.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+          setMessagesWithSorting(sortedMsgs);
+          
           // Replace cache as well
           connectionManager.clearMessages(agentId);
-          msgs.forEach(msg => connectionManager.appendMessage(agentId, msg));
+          sortedMsgs.forEach(msg => connectionManager.appendMessage(agentId, msg));
         },
         onConversationList: (receivedAgentId: string, data: { sessions: Array<{ session_id: string; modified_at: string; file_path: string }> }) => {
           if (receivedAgentId !== agentId) return;
@@ -563,7 +609,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
       if (!sessionId) return;
       // Restore messages from cache if available; otherwise start empty
       const cachedMessages = connectionManager.getMessages(agentId);
-      setMessages(cachedMessages);
+      setMessagesWithSorting(cachedMessages);
       // Set progress bar to N/A initially - backend updates after first response
       setContextUsage(null);
       setTokensUsed(null);
@@ -585,7 +631,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
       metadata: {},
     };
 
-    setMessages(prev => [...prev, userMessage]);
+    addMessageWithSorting(userMessage);
     connectionManager.appendMessage(agentId, userMessage);
     setInputMessage('');
     setIsLoading(true);

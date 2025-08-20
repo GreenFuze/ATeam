@@ -143,7 +143,7 @@ if os.path.exists("./static/index.html"):
             raise HTTPException(status_code=404, detail="Static files not found")
 
 else:
-    print("🚀 Running in DEVELOPMENT mode - static files not found")
+    raise RuntimeError('Cannot find frontend files')
 
 # Error handling for unhandled exceptions
 @app.exception_handler(Exception)

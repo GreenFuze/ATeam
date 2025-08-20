@@ -39,8 +39,9 @@ class KBManager:
             agent_kb_dir = self.base_dir / agent_id / "kb"
             agent_kb_dir.mkdir(parents=True, exist_ok=True)
             client = PersistentClient(path=str(agent_kb_dir))
-            # Use a single collection named 'kb' per agent
-            self._collections[agent_id] = client.get_or_create_collection(name="kb")
+            # Use a descriptive collection name that meets ChromaDB validation requirements
+            collection_name = f"knowledgebase_{agent_id}"
+            self._collections[agent_id] = client.get_or_create_collection(name=collection_name)
 
     def _assert_caller(self, agent_id: str, caller_agent_id: Optional[str]):
         if caller_agent_id is None:
@@ -51,12 +52,15 @@ class KBManager:
 
     # ---------- KB API ----------
     def add(self, *, agent_id: str, content: str, metadata: Optional[Dict[str, Any]] = None, caller_agent_id: Optional[str] = None) -> List[str]:
+
         self._assert_caller(agent_id, caller_agent_id)
         if not content or not isinstance(content, str):
             raise ValueError("content must be a non-empty string")
+
         self._ensure_collection(agent_id)
         lock = self._get_lock(agent_id)
         created_ids: List[str] = []
+ 
         with lock:
             max_chunk = embedding_manager().get_max_chunk_size()
             chunks: List[str] = []
@@ -65,16 +69,19 @@ class KBManager:
             else:
                 for i in range(0, len(content), max_chunk):
                     chunks.append(content[i:i+max_chunk])
+
             now = datetime.now().isoformat()
             metabase = dict(metadata or {})
+            
             # Compute embeddings for all chunks at once (batch for performance)
             try:
                 embeddings = embedding_manager().embed(chunks)
             except Exception as e:
                 logger.error(f"KB add embed failed for agent={agent_id}: {e}")
                 raise
+            
             for idx, chunk in enumerate(chunks):
-                item_id = f"kb_{int(datetime.now().timestamp()*1000)}_{idx}"
+                item_id = f"knowledgebase_item_{int(datetime.now().timestamp()*1000)}_{idx}"
                 item_meta = {
                     **metabase,
                     "id": item_id,
@@ -89,30 +96,39 @@ class KBManager:
                     embeddings=[embeddings[idx]] if embeddings else None,
                 )
                 created_ids.append(item_id)
+                
             logger.info(f"KB add: agent={agent_id} items={len(created_ids)}")
         return created_ids
 
+
     def update(self, *, agent_id: str, item_id: str, content: str, metadata: Optional[Dict[str, Any]] = None, caller_agent_id: Optional[str] = None) -> None:
+        
         self._assert_caller(agent_id, caller_agent_id)
+        
         if not item_id:
             raise ValueError("item_id is required")
+        
         self._ensure_collection(agent_id)
+       
         with self._get_lock(agent_id):
             now = datetime.now().isoformat()
             metas = metadata or {}
             metas.update({"updated_at": now})
+            
             # Recompute embedding for updated content
             try:
                 embedding = embedding_manager().embed([content])[0]
             except Exception as e:
                 logger.error(f"KB update embed failed for agent={agent_id} item={item_id}: {e}")
                 raise
+            
             self._collections[agent_id].update(
                 ids=[item_id],
                 documents=[content],
                 metadatas=[metas],
                 embeddings=[embedding],
             )
+            
             logger.info(f"KB update: agent={agent_id} item={item_id}")
 
     def get(self, *, agent_id: str, item_id: str, caller_agent_id: Optional[str] = None) -> Dict[str, Any]:
@@ -172,6 +188,26 @@ class KBManager:
                 })
             logger.info(f"KB search: agent={agent_id} q_len={len(query)} results={len(out)}")
             return out
+
+    def delete(self, *, agent_id: str, item_id: str, caller_agent_id: Optional[str] = None) -> None:
+        """Delete a KB item by id."""
+        self._assert_caller(agent_id, caller_agent_id)
+        if not item_id:
+            raise ValueError("item_id is required")
+        self._ensure_collection(agent_id)
+        with self._get_lock(agent_id):
+            # Check if item exists before deleting
+            try:
+                res = self._collections[agent_id].get(ids=[item_id])
+                if not res or not res.get("ids"):
+                    raise ValueError("item not found")
+            except Exception as e:
+                logger.error(f"KB delete check failed for agent={agent_id} item={item_id}: {e}")
+                raise
+            
+            # Delete the item from ChromaDB
+            self._collections[agent_id].delete(ids=[item_id])
+            logger.info(f"KB delete: agent={agent_id} item={item_id}")
 
     # ---------- Plan API ----------
     _PLAN_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")

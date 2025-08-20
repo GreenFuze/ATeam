@@ -248,7 +248,51 @@ export class ConnectionManager {
     if (!this.messageCacheByAgent[agentId]) {
       this.messageCacheByAgent[agentId] = [];
     }
-    this.messageCacheByAgent[agentId].push(message);
+    
+    // Insert message in timestamp-sorted order
+    this.messageCacheByAgent[agentId] = this.insertMessageInOrder(this.messageCacheByAgent[agentId], message);
+  }
+
+  // Helper function to insert a message in timestamp-sorted order
+  private insertMessageInOrder(currentMessages: Message[], newMessage: Message): Message[] {
+    // If the new message has a timestamp later than the last message, append it (most common case)
+    if (currentMessages.length === 0 || newMessage.timestamp >= currentMessages[currentMessages.length - 1].timestamp) {
+      return [...currentMessages, newMessage];
+    }
+    
+    // If the new message has a timestamp earlier than the first message, prepend it
+    if (newMessage.timestamp <= currentMessages[0].timestamp) {
+      return [newMessage, ...currentMessages];
+    }
+    
+    // Otherwise, find the correct insertion position using binary search
+    let left = 0;
+    let right = currentMessages.length - 1;
+    
+    while (left <= right) {
+      const mid = Math.floor((left + right) / 2);
+      const midTimestamp = currentMessages[mid].timestamp;
+      
+      if (newMessage.timestamp === midTimestamp) {
+        // Insert after messages with the same timestamp
+        return [
+          ...currentMessages.slice(0, mid + 1),
+          newMessage,
+          ...currentMessages.slice(mid + 1)
+        ];
+      } else if (newMessage.timestamp < midTimestamp) {
+        right = mid - 1;
+      } else {
+        left = mid + 1;
+      }
+    }
+    
+    // Insert at the found position
+    return [
+      ...currentMessages.slice(0, left),
+      newMessage,
+      ...currentMessages.slice(left)
+    ];
   }
 
   public getMessages(agentId: string): Message[] {

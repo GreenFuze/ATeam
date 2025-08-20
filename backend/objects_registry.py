@@ -4,7 +4,7 @@ Provides centralized access to all manager instances.
 """
 
 from agent_manager import AgentManager
-from tool_manager import ToolManager
+from tools.tool_manager import ToolManager
 from prompt_manager import PromptManager
 from provider_manager import ProviderManager
 from models_manager import ModelsManager
@@ -36,7 +36,7 @@ def initialize_managers():
     global _agent_manager, _tool_manager, _prompt_manager, _provider_manager, _models_manager, _schema_manager, _notification_manager, _frontend_api, _embedding_manager, _kb_manager
     
     # Initialize managers in dependency order
-    _tool_manager = ToolManager("tools")
+    _tool_manager = ToolManager("tools/tools")
     _agent_manager = AgentManager("agents.yaml")
     _prompt_manager = PromptManager("prompts")
     _provider_manager = ProviderManager("providers.yaml")

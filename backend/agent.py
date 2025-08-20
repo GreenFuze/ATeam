@@ -24,9 +24,10 @@ from schemas import (
     StructuredResponseType, ChatResponse, ToolCallResponse, ToolReturnResponse,
     AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, AgentOrchestrationFailedResponse, RefinementResponse,
     UnknownActionError, SessionRef, MessageHistory, PromptType, OperationType,
+    ErrorChatResponse,
 )
 from notification_utils import log_error, log_warning, log_info
-from tool_executor import ToolRunner
+from tools.tool_executor import ToolRunner
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +329,7 @@ class Agent:
             raise ValueError("Target agent is empty")
         
         if not agent_manager().is_agent_config(target_str):
-            from backend.tools.agent_management import get_all_agents_descriptions
+            from tools.tools.agent_management import get_all_agents_descriptions
             raise ValueError(f"Requested agent doesn't exist. Available agents:\n{get_all_agents_descriptions()}")
         
         # Exact id
@@ -508,11 +509,12 @@ class Agent:
     
     async def _handle_structured_response(self, structured_response: StructuredResponseType) -> None:
         """Handle different response actions - each handler manages its own UI communication and history"""
-        if isinstance(structured_response, ChatResponse):
+        if isinstance(structured_response, ErrorChatResponse):
+            await self._handle_error_response(structured_response)
+        elif isinstance(structured_response, ChatResponse):
             await self._handle_chat_response(structured_response)
         elif isinstance(structured_response, ToolCallResponse):
             await self._handle_tool_call(structured_response)
-
         elif isinstance(structured_response, AgentDelegateResponse):
             await self._handle_agent_delegate(structured_response)
         elif isinstance(structured_response, AgentCallResponse):
@@ -605,6 +607,17 @@ class Agent:
             llm_response,
             self._calculate_context_usage()
         )
+
+    async def _handle_error_response(self, response: ErrorChatResponse) -> None:
+        """Handle error response - feed back to LLM for recovery."""
+        from llm_auto_reply_prompts import LLMAutoReplyPrompts
+        
+        # Send error to UI first
+        await self._send_llm_response_to_ui(response.to_ui())
+        
+        # Feed error back to LLM for recovery
+        error_feedback = f"Error: {response.content}. {LLMAutoReplyPrompts.RECOVERY_INSTRUCTION}"
+        self._schedule(self.send_to_llm(error_feedback))
 
     async def _handle_agent_delegate(self, response: AgentDelegateResponse) -> None:
         """Handle agent delegation - delegate to another agent or fail if not found."""

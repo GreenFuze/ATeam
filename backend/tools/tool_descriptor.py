@@ -44,6 +44,9 @@ def tools_to_prompt(
         for p in sig.parameters.values():
             if p.name == "self":
                 continue
+            if p.name == "caller_agent_id":
+                # Skip caller_agent_id parameter as it's automatically injected by the system
+                continue
             ann = p.annotation if p.annotation is not inspect._empty else "Any"
             ann_name = ann.__name__ if hasattr(ann, "__name__") else str(ann) # type: ignore
             if p.default is inspect._empty:
@@ -92,6 +95,9 @@ def class_to_prompt(
         for p in sig.parameters.values():
             if p.name == "self":
                 continue
+            if p.name == "caller_agent_id":
+                # Skip caller_agent_id parameter as it's automatically injected by the system
+                continue
             ann = p.annotation if p.annotation is not inspect._empty else "Any"
             ann_name = ann.__name__ if hasattr(ann, "__name__") else str(ann) # type: ignore
             if p.default is inspect._empty:
@@ -115,6 +121,28 @@ def class_to_prompt(
 
     body = sep.join(_describe_method(m, cls.__name__) for m in methods)
     return f"# {heading}\n{body}" if heading else body
+
+def _filter_signature_for_llm(signature_str: str) -> str:
+    """
+    Filter out caller_agent_id parameter from signature string for LLM consumption.
+    """
+    if "caller_agent_id" not in signature_str:
+        return signature_str
+    
+    # Simple string replacement to remove caller_agent_id parameter
+    # This handles common signature patterns
+    import re
+    
+    # Remove ", caller_agent_id: Optional[str] = None" or similar patterns
+    signature_str = re.sub(r',\s*caller_agent_id:\s*[^,)]*', '', signature_str)
+    
+    # Remove "caller_agent_id: Optional[str] = None," or similar patterns at the beginning
+    signature_str = re.sub(r'caller_agent_id:\s*[^,)]*,\s*', '', signature_str)
+    
+    # Remove "caller_agent_id: Optional[str] = None" when it's the only parameter
+    signature_str = re.sub(r'\(\s*caller_agent_id:\s*[^)]*\)', '()', signature_str)
+    
+    return signature_str
 
 def get_tool_prompt_for_agent(tool_names: List[str], tool_manager) -> str:
     """
@@ -149,11 +177,13 @@ def get_tool_prompt_for_agent(tool_names: List[str], tool_manager) -> str:
             fq_name = f"{module_name}.{tool['name']}"
             desc_full = tool.get('description', 'No description provided.') or 'No description provided.'
             desc = (desc_full.strip().split('\n')[0]) if desc_full else 'No description provided.'
+            # Filter signature to remove caller_agent_id parameter
+            signature = _filter_signature_for_llm(tool.get('signature', '(...)'))
             tools_info.append(
                 "\n".join([
                     f"Tool: {fq_name}",
                     f"Description: {desc}",
-                    f"Arguments: {tool.get('signature', '(...)')}"
+                    f"Arguments: {signature}"
                 ])
             )
         elif tool['type'] == 'class':
@@ -166,7 +196,8 @@ def get_tool_prompt_for_agent(tool_names: List[str], tool_manager) -> str:
                     fq_name = f"{module_name}.{class_name}.{method_name}"
                     desc_full = method.get('description', 'No description provided.') or 'No description provided.'
                     description = (desc_full.strip().split('\n')[0]) if desc_full else 'No description provided.'
-                    signature = method.get('signature', '(...)')
+                    # Filter signature to remove caller_agent_id parameter
+                    signature = _filter_signature_for_llm(method.get('signature', '(...)'))
                     tools_info.append(
                         "\n".join([
                             f"Tool: {fq_name}",

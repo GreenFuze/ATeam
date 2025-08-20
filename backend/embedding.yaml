@@ -1,0 +1,3 @@
+selected_model: text-embedding-3-large
+max_chunk_size: 8191
+updated_at: '2025-08-19T09:00:00'

@@ -445,6 +445,9 @@ class UILLMResponse(BaseModel):
     tool_parameters: Optional[Dict[str, Any]] = None
     target_agent_id: Optional[str] = None
     
+    # Timestamp field - automatically generated when object is created
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    
     # Tracking fields
     already_sent: bool = False
     

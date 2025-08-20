@@ -25,18 +25,10 @@ export class ToolCallMessageDisplay extends ToolBaseMessageDisplay {
     const { message } = this.props;
     const metadataItems = [];
 
-    if (message.tool_name) {
-      metadataItems.push(
-        <div key="tool" style={{ marginTop: '8px', padding: '8px', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: '4px' }}>
-          <strong>Tool:</strong> {message.tool_name}
-        </div>
-      );
-    }
-
     if (message.tool_parameters) {
       metadataItems.push(
         <div key="params" style={{ marginTop: '4px', padding: '8px', backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: '4px' }}>
-          <strong>Parameters:</strong> {JSON.stringify(message.tool_parameters)}
+          <strong>Parameters:</strong> <span style={{ fontFamily: 'Consolas, "Courier New", monospace' }}>{JSON.stringify(message.tool_parameters)}</span>
         </div>
       );
     }

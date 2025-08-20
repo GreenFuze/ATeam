@@ -1,5 +1,5 @@
 import { AgentConfig } from '../types';
-import { agentsApi } from '../api';
+import { connectionManager } from './ConnectionManager';
 
 interface AgentInfoCache {
   [agentId: string]: AgentConfig;
@@ -9,7 +9,7 @@ class AgentInfoService {
   private cache: AgentInfoCache = {};
 
   /**
-   * Get agent information by ID. If not in cache, fetch from backend.
+   * Get agent information by ID. If not in cache, get from ConnectionManager.
    * Follows fail-fast principle - throws error if agent not found.
    */
   async getAgentInfo(agentId: string): Promise<AgentConfig> {
@@ -18,9 +18,15 @@ class AgentInfoService {
       return this.cache[agentId];
     }
 
-    // Fetch from backend
+    // Get from ConnectionManager (WebSocket-based)
     try {
-      const agentInfo = await agentsApi.getById(agentId);
+      const agents = connectionManager.getAgents();
+      const agentInfo = agents.find(agent => agent.id === agentId);
+      
+      if (!agentInfo) {
+        // Fail-fast: throw error immediately if agent not found
+        throw new Error(`Agent '${agentId}' not found in ConnectionManager`);
+      }
       
       // Cache the result permanently (agent info is static)
       this.cache[agentId] = agentInfo;
