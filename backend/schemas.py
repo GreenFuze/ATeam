@@ -62,8 +62,10 @@ class MessageType(str, Enum):
     AGENT_ORCHESTRATION_FAILED = "AGENT_ORCHESTRATION_FAILED"
     REFINEMENT_RESPONSE = "REFINEMENT_RESPONSE"
     SYSTEM = "SYSTEM"
+    SYSTEM_MESSAGE = "SYSTEM_MESSAGE"
     SEED_MESSAGE = "seed_message"
     ERROR = "ERROR"
+    ERROR_RESPONSE = "ERROR_RESPONSE"
 
 class FrontendMessageType(str, Enum):
     """Message types for frontend API communication"""
@@ -86,6 +88,11 @@ class FrontendMessageType(str, Enum):
     AGENT_DELEGATE = "AGENT_DELEGATE"
     AGENT_CALL = "AGENT_CALL"
     TOOL_CALL = "TOOL_CALL"
+    # Streaming message types
+    REQUEST_CONTENT = "REQUEST_CONTENT"
+    STREAM_STARTED = "STREAM_STARTED"
+    STREAM_COMPLETE = "STREAM_COMPLETE"
+    STREAM_ERROR = "STREAM_ERROR"
 
 class MessageIcon(str, Enum):
     CHAT = "chat"
@@ -99,6 +106,28 @@ class MessageIcon(str, Enum):
 class PromptType(str, Enum):
     SYSTEM = "system"
     SEED = "seed"
+
+class StreamState(str, Enum):
+    """Stream state for message content streaming"""
+    PENDING = "PENDING"
+    STREAMING = "STREAMING"
+    COMPLETE = "COMPLETE"
+    ERROR = "ERROR"
+
+class StreamChunkType(str, Enum):
+    """Types of stream chunks"""
+    PROGRESS = "progress"
+    CONTENT = "content"
+    COMPLETE = "complete"
+    ERROR = "error"
+
+class StreamChunk(BaseModel):
+    """Schema for streaming content chunks"""
+    chunk: str
+    type: StreamChunkType
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+    chunk_id: int = Field(ge=0)
+    error: Optional[str] = None
 
 class OperationType(str, Enum):
     DELEGATE = "delegate"
@@ -408,6 +437,10 @@ class Message(BaseModel):
     # For structured responses
     action: Optional[str] = None
     reasoning: Optional[str] = None
+    
+    # For streaming messages
+    stream_id: Optional[str] = None  # GUID for streaming content
+    stream_state: Optional[StreamState] = None
 
     @classmethod
     def create_user_message(cls, agent_id: str, content: str) -> 'Message':
@@ -444,6 +477,10 @@ class UILLMResponse(BaseModel):
     tool_name: Optional[str] = None
     tool_parameters: Optional[Dict[str, Any]] = None
     target_agent_id: Optional[str] = None
+    
+    # Streaming fields
+    id: Optional[str] = None  # GUID for streaming messages, null for immediate content
+    stream_state: Optional[StreamState] = None
     
     # Timestamp field - automatically generated when object is created
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
@@ -483,6 +520,10 @@ class UILLMResponse(BaseModel):
 class UIChatResponse(UILLMResponse):
     """UI wrapper for ChatResponse"""
     def __init__(self, chat_response: ChatResponse, model: str, agent_id: str, icon: Optional[MessageIcon] = None):
+        # Generate GUID for streaming content
+        import uuid
+        stream_id = str(uuid.uuid4())
+        
         super().__init__(
             content=chat_response.content,
             message_type=MessageType.CHAT_RESPONSE,
@@ -491,7 +532,9 @@ class UIChatResponse(UILLMResponse):
             },
             action=chat_response.action,
             reasoning=chat_response.reasoning,
-            icon=icon
+            icon=icon,
+            id=stream_id,  # GUID for streaming
+            stream_state=StreamState.PENDING
         )
 
 
@@ -513,6 +556,10 @@ class UIErrorChatResponse(UILLMResponse):
 class UIToolCallResponse(UILLMResponse):
     """UI wrapper for ToolCallResponse"""
     def __init__(self, tool_call: ToolCallResponse, model: str, agent_id: str):
+        # Generate GUID for streaming content
+        import uuid
+        stream_id = str(uuid.uuid4())
+        
         super().__init__(
             content=f"Calling tool {tool_call.tool}",
             message_type=MessageType.TOOL_CALL,
@@ -524,7 +571,9 @@ class UIToolCallResponse(UILLMResponse):
             action=tool_call.action,
             reasoning=tool_call.reasoning,
             tool_name=tool_call.tool,
-            tool_parameters=tool_call.args
+            tool_parameters=tool_call.args,
+            id=stream_id,  # GUID for streaming
+            stream_state=StreamState.PENDING
         )
 
 
@@ -580,15 +629,15 @@ class UIAgentReturnResponse(UILLMResponse):
     """UI wrapper for AgentReturnResponse"""
     def __init__(self, agent_return: AgentReturnResponse, model: str, agent_id: str):
         super().__init__(
-            content=f"Return from agent {agent_return.agent_id}",
+            content=f"Return from agent {agent_return.returning_agent}",
             message_type=MessageType.AGENT_RETURN,
             metadata={
                 "model": model,
-                "caller_agent": agent_return.caller_agent_id,
+                "returning_agent": agent_return.returning_agent,
             },
             action=agent_return.action,
             reasoning=agent_return.reasoning,
-            target_agent_id=agent_return.agent_id
+            target_agent_id=agent_return.returning_agent
         )
 
 

@@ -1,33 +1,66 @@
 import React from 'react';
 import {
   Box, Text, Group, ActionIcon, Tooltip, Menu,
-  Paper, Textarea, Button, Divider, Checkbox
+  Paper, Textarea, Button, Divider, Checkbox, Badge, Alert
 } from '@mantine/core';
 import { notifications } from '@mantine/notifications';
 import {
   IconDotsVertical, IconFileText, IconMarkdown,
   IconEdit, IconCode, IconChevronDown, IconChevronRight,
-  IconCopy
+  IconCopy, IconPlayerPause, IconPlayerPlay, IconX, IconAlertCircle
 } from '@tabler/icons-react';
 import ReactMarkdown from 'react-markdown';
 import { BaseMessageDisplayProps, DisplayMode } from './types';
 import { agentInfoService } from '../../services/AgentInfoService';
 import { AgentConfig } from '../../types';
+import { connectionManager } from '../../services/ConnectionManager';
+import { StreamCallbacks } from '../../services/StreamingClient';
 
-export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisplayProps> {
-  state = {
-    displayMode: this.props.defaultDisplayMode || 'markdown' as DisplayMode,
+interface BaseMessageDisplayState {
+  displayMode: DisplayMode;
+  showOptions: boolean;
+  editContent: string;
+  isEditing: boolean;
+  showReasoning: boolean;
+  collapsed: boolean;
+  agentInfo: AgentConfig | null;
+  agentNameError: string | null;
+  // Streaming state
+  streamContent: string;
+  isStreaming: boolean;
+  streamError: string | null;
+  streamComplete: boolean;
+  streamPaused: boolean;
+}
+
+export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisplayProps, BaseMessageDisplayState> {
+  state: BaseMessageDisplayState = {
+    displayMode: this.props.defaultDisplayMode || 'markdown',
     showOptions: false,
     editContent: this.props.message.content,
     isEditing: this.props.editable && this.props.defaultEditMode || false,
     showReasoning: false,
     collapsed: this.props.isCollapsible && this.props.isCollapsed || false,
-    agentInfo: null as AgentConfig | null,
-    agentNameError: null as string | null
+    agentInfo: null,
+    agentNameError: null,
+    // Streaming state
+    streamContent: '',
+    isStreaming: false,
+    streamError: null,
+    streamComplete: false,
+    streamPaused: false
   };
 
   componentDidMount() {
     this.loadAgentInfo();
+    this.initializeStreaming();
+  }
+
+  componentWillUnmount() {
+    // Clean up stream if component unmounts
+    if (this.props.message.stream_id) {
+      connectionManager.cancelContentStream(this.props.message.stream_id);
+    }
   }
 
   componentDidUpdate(prevProps: BaseMessageDisplayProps) {
@@ -63,6 +96,90 @@ export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisp
       });
     }
   }
+
+  private async initializeStreaming() {
+    const { message } = this.props;
+    
+    // If this is a streaming message, start the stream
+    if (message.stream_id && message.is_streaming) {
+      this.setState({ isStreaming: true });
+      
+      const callbacks: StreamCallbacks = {
+        onProgress: (chunk) => {
+          console.log('Stream progress:', chunk.chunk);
+        },
+        onContent: (chunk) => {
+          this.setState(prevState => ({
+            streamContent: prevState.streamContent + chunk.chunk
+          }));
+        },
+        onComplete: () => {
+          this.setState({
+            isStreaming: false,
+            streamComplete: true
+          });
+        },
+        onError: (error) => {
+          this.setState({
+            isStreaming: false,
+            streamError: error
+          });
+        }
+      };
+
+      // Determine priority based on message type
+      const priority = message.message_type === 'TOOL_CALL' ? 'high' : 'low';
+      
+      const success = await connectionManager.startContentStream(
+        message.stream_id,
+        message.agent_id,
+        this.props.sessionId || '',
+        callbacks,
+        priority
+      );
+
+      if (!success) {
+        this.setState({
+          isStreaming: false,
+          streamError: 'Failed to start content stream'
+        });
+      }
+    }
+  }
+
+  // Streaming control handlers
+  handlePauseStream = async () => {
+    const { message } = this.props;
+    if (message.stream_id) {
+      const success = await connectionManager.pauseContentStream(message.stream_id);
+      if (success) {
+        this.setState({ streamPaused: true });
+      }
+    }
+  };
+
+  handleResumeStream = async () => {
+    const { message } = this.props;
+    if (message.stream_id) {
+      const success = await connectionManager.resumeContentStream(message.stream_id);
+      if (success) {
+        this.setState({ streamPaused: false });
+      }
+    }
+  };
+
+  handleCancelStream = async () => {
+    const { message } = this.props;
+    if (message.stream_id) {
+      const success = await connectionManager.cancelContentStream(message.stream_id);
+      if (success) {
+        this.setState({
+          isStreaming: false,
+          streamError: 'Stream cancelled by user'
+        });
+      }
+    }
+  };
 
   private getAgentName(): string {
     const { message } = this.props;
@@ -192,7 +309,16 @@ export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisp
   };
 
   renderMessageContent = () => {
+    // Handle streaming content
     let content = this.state.isEditing ? this.state.editContent : this.props.message.content;
+    
+    // If streaming, use stream content
+    if (this.state.isStreaming || this.state.streamComplete) {
+      content = this.state.streamContent || content;
+    }
+
+    // Check if content is very long (over 50KB) and show virtualization warning
+    const isVeryLong = content && content.length > 50000;
 
     if (this.state.displayMode === 'raw') {
       const rawData = {
@@ -207,6 +333,11 @@ export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisp
       };
       return (
         <Box>
+          {isVeryLong && (
+            <Alert icon={<IconAlertCircle size={16} />} title="Large Content" color="yellow" mb="xs">
+              This content is very large ({Math.round(content.length / 1024)}KB). Consider using markdown mode for better performance.
+            </Alert>
+          )}
           <Text size="sm" style={{ 
             backgroundColor: 'rgba(0,0,0,0.3)', 
             padding: '8px', 
@@ -265,31 +396,26 @@ export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisp
     if (this.state.displayMode === 'markdown') {
       return (
         <Box style={{ color: 'white' }}>
-          <ReactMarkdown
-            components={{
-              p: ({ children }) => <Text size="sm" style={{ whiteSpace: 'pre-wrap' }} c="white">{children}</Text>,
-              h1: ({ children }) => <Text size="lg" fw={700} c="white">{children}</Text>,
-              h2: ({ children }) => <Text size="md" fw={600} c="white">{children}</Text>,
-              h3: ({ children }) => <Text size="sm" fw={600} c="white">{children}</Text>,
-              strong: ({ children }) => <Text component="span" fw={600} c="white">{children}</Text>,
-              em: ({ children }) => <Text component="span" fs="italic" c="white">{children}</Text>,
-              code: ({ children }) => <Text component="code" style={{ backgroundColor: 'rgba(255,255,255,0.1)', padding: '2px 4px', borderRadius: '4px' }} c="white">{children}</Text>,
-              pre: ({ children }) => <Box style={{ backgroundColor: 'rgba(255,255,255,0.1)', padding: '8px', borderRadius: '4px', margin: '8px 0' }}>{children}</Box>,
-              ul: ({ children }) => <Box component="ul" style={{ margin: '8px 0', paddingLeft: '20px' }}>{children}</Box>,
-              ol: ({ children }) => <Box component="ol" style={{ margin: '8px 0', paddingLeft: '20px' }}>{children}</Box>,
-              li: ({ children }) => <Text component="li" size="sm" c="white">{children}</Text>,
-              blockquote: ({ children }) => <Box style={{ borderLeft: '4px solid var(--mantine-color-gray-4)', paddingLeft: '12px', margin: '8px 0' }}>{children}</Box>,
-            }}
-          >
-            {content}
-          </ReactMarkdown>
+          {isVeryLong && (
+            <Alert icon={<IconAlertCircle size={16} />} title="Large Content" color="yellow" mb="xs">
+              This content is very large ({Math.round(content.length / 1024)}KB). Rendering may take a moment.
+            </Alert>
+          )}
+          <MemoizedReactMarkdown content={content} />
         </Box>
       );
     } else {
       return (
-        <Text size="sm" style={{ whiteSpace: 'pre-wrap' }} c="white">
-          {content}
-        </Text>
+        <Box>
+          {isVeryLong && (
+            <Alert icon={<IconAlertCircle size={16} />} title="Large Content" color="yellow" mb="xs">
+              This content is very large ({Math.round(content.length / 1024)}KB). Consider using markdown mode for better formatting.
+            </Alert>
+          )}
+          <Text size="sm" style={{ whiteSpace: 'pre-wrap' }} c="white">
+            {content}
+          </Text>
+        </Box>
       );
     }
   };
@@ -422,6 +548,31 @@ export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisp
                   Copy Content
                 </Menu.Item>
                 
+                {/* Streaming controls */}
+                {this.state.isStreaming && (
+                  <>
+                    <Menu.Item
+                      leftSection={<IconPlayerPause size={14} />}
+                      onClick={this.handlePauseStream}
+                    >
+                      Pause Stream
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<IconPlayerPlay size={14} />}
+                      onClick={this.handleResumeStream}
+                    >
+                      Resume Stream
+                    </Menu.Item>
+                    <Menu.Item
+                      leftSection={<IconX size={14} />}
+                      onClick={this.handleCancelStream}
+                      color="red"
+                    >
+                      Cancel Stream
+                    </Menu.Item>
+                  </>
+                )}
+                
                 <Menu.Item>
                   <Checkbox
                     label="Reasoning"
@@ -466,4 +617,100 @@ export abstract class BaseMessageDisplay extends React.Component<BaseMessageDisp
   protected getIconColor(): string {
     return 'var(--mantine-color-white)';
   }
+
+  // Helper method to get streaming badges - can be overridden by child classes
+  protected getStreamingBadges(): JSX.Element[] {
+    const badges: JSX.Element[] = [];
+    
+    if (this.state.isStreaming) {
+      badges.push(
+        <Badge key="streaming" size="xs" variant="light" color="blue">
+          STREAMING
+        </Badge>
+      );
+    }
+    
+    if (this.state.streamError) {
+      badges.push(
+        <Badge key="error" size="xs" variant="light" color="red">
+          ERROR
+        </Badge>
+      );
+    }
+    
+    if (this.state.streamComplete) {
+      badges.push(
+        <Badge key="complete" size="xs" variant="light" color="green">
+          COMPLETE
+        </Badge>
+      );
+    }
+    
+    if (this.state.streamPaused) {
+      badges.push(
+        <Badge key="paused" size="xs" variant="light" color="yellow">
+          PAUSED
+        </Badge>
+      );
+    }
+    
+    // Add priority indicator for high priority streams
+    if (this.props.message.stream_id && this.state.isStreaming) {
+      // Check if this is a tool call (high priority)
+      if (this.props.message.message_type === 'TOOL_CALL') {
+        badges.push(
+          <Badge key="priority" size="xs" variant="light" color="orange">
+            HIGH PRIORITY
+          </Badge>
+        );
+      }
+    }
+    
+    // Add queue status indicator
+    if (this.props.message.stream_id && !this.state.isStreaming && !this.state.streamError && !this.state.streamComplete) {
+      badges.push(
+        <Badge key="queued" size="xs" variant="light" color="gray">
+          QUEUED
+        </Badge>
+      );
+    }
+    
+    return badges;
+  }
 }
+
+// Memoized ReactMarkdown component for performance optimization
+const MemoizedReactMarkdown = React.memo(({ content }: { content: string }) => (
+  <ReactMarkdown
+    components={{
+      p: ({ children }) => <Text size="sm" style={{ whiteSpace: 'pre-wrap' }} c="white">{children}</Text>,
+      h1: ({ children }) => <Text size="lg" fw={700} c="white">{children}</Text>,
+      h2: ({ children }) => <Text size="md" fw={600} c="white">{children}</Text>,
+      h3: ({ children }) => <Text size="sm" fw={600} c="white">{children}</Text>,
+      strong: ({ children }) => <Text component="span" fw={600} c="white">{children}</Text>,
+      em: ({ children }) => <Text component="span" fs="italic" c="white">{children}</Text>,
+      code: ({ children }) => <Text component="code" style={{ backgroundColor: 'rgba(255,255,255,0.1)', padding: '2px 4px', borderRadius: '4px' }} c="white">{children}</Text>,
+      pre: ({ children }) => <Box style={{ backgroundColor: 'rgba(255,255,255,0.1)', padding: '8px', borderRadius: '4px', margin: '8px 0' }}>{children}</Box>,
+      ul: ({ children }) => <Box component="ul" style={{ margin: '8px 0', paddingLeft: '20px' }}>{children}</Box>,
+      ol: ({ children }) => <Box component="ol" style={{ margin: '8px 0', paddingLeft: '20px' }}>{children}</Box>,
+      li: ({ children }) => <Text component="li" size="sm" c="white">{children}</Text>,
+      blockquote: ({ children }) => <Box style={{ borderLeft: '4px solid var(--mantine-color-gray-4)', paddingLeft: '12px', margin: '8px 0' }}>{children}</Box>,
+    }}
+  >
+    {content}
+  </ReactMarkdown>
+), (prevProps, nextProps) => {
+  // Only re-render if content changes
+  return prevProps.content === nextProps.content;
+});
+
+// Memoized wrapper for BaseMessageDisplay to prevent unnecessary re-renders
+export const MemoizedBaseMessageDisplay = React.memo(BaseMessageDisplay as any, (prevProps, nextProps) => {
+  // Only re-render if message content, streaming state, or display mode changes
+  return (
+    prevProps.message.content === nextProps.message.content &&
+    prevProps.message.stream_id === nextProps.message.stream_id &&
+    prevProps.message.stream_state === nextProps.message.stream_state &&
+    prevProps.defaultDisplayMode === nextProps.defaultDisplayMode
+  );
+});

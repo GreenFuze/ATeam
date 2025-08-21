@@ -189,19 +189,58 @@ class FrontendAPI:
             # Send context update first
             await self._context_update(context_usage)
 
-            # Create envelope with UILLMResponse data
-            envelope = FrontendAPIEnvelope(
-                type=FrontendMessageType.AGENT_RESPONSE,
-                agent_id=self._session.agent_id,
-                agent_name=self._session.agent_name,
-                session_id=self._session.session_id,
-                data=response.model_dump()
-            )
-            
-            await self._api._send_to_agent_message(self._session, envelope.model_dump())
-            
-            # Mark as already sent after successful send
-            response.mark_as_sent()
+            # Check if this is a streaming message (has GUID)
+            if response.id is not None:
+                # This is a streaming message - send shell immediately
+                logger.debug(f"🔍 DEBUG: Sending streaming message shell for {response.id}")
+                
+                # Create streaming message shell (without content)
+                shell_data = {
+                    "id": response.id,
+                    "type": response.message_type.value,
+                    "agent_id": self._session.agent_id,
+                    "timestamp": response.timestamp,
+                    "stream_state": response.stream_state.value if response.stream_state else "PENDING",
+                    "action": response.action,
+                    "reasoning": response.reasoning,
+                    "icon": response.icon.value if response.icon else None,
+                    "tool_name": response.tool_name,
+                    "tool_parameters": response.tool_parameters,
+                    "target_agent_id": response.target_agent_id,
+                    "metadata": response.metadata
+                }
+                
+                # Send streaming message shell
+                envelope = FrontendAPIEnvelope(
+                    type=FrontendMessageType.AGENT_RESPONSE,
+                    agent_id=self._session.agent_id,
+                    agent_name=self._session.agent_name,
+                    session_id=self._session.session_id,
+                    data=shell_data
+                )
+                
+                await self._api._send_to_agent_message(self._session, envelope.model_dump())
+                
+                # Mark as already sent after successful send
+                response.mark_as_sent()
+                
+            else:
+                # This is a non-streaming message - send full content immediately
+                logger.debug(f"🔍 DEBUG: Sending non-streaming message with full content")
+                
+                # Create envelope with UILLMResponse data
+                envelope = FrontendAPIEnvelope(
+                    type=FrontendMessageType.AGENT_RESPONSE,
+                    agent_id=self._session.agent_id,
+                    agent_name=self._session.agent_name,
+                    session_id=self._session.session_id,
+                    data=response.model_dump()
+                )
+                
+                await self._api._send_to_agent_message(self._session, envelope.model_dump())
+                
+                # Mark as already sent after successful send
+                response.mark_as_sent()
 
         async def stream(self, content_delta: str) -> None:
             # Create stream message data

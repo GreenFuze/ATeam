@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { notifications } from '@mantine/notifications';
 import { 
   Container, Stack, Group, Textarea, Button, 
@@ -36,6 +36,25 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
   const autoScrollAllowedRef = useRef<boolean>(false);
   const initialAutoScrollPendingRef = useRef<boolean>(false);
   const atBottomRef = useRef<boolean>(true);
+  
+  // Virtualization settings
+  const MESSAGE_VIRTUALIZATION_THRESHOLD = 100;
+  const VISIBLE_MESSAGE_BUFFER = 20;
+  
+  // Virtualized message calculation
+  const visibleMessages = useMemo(() => {
+    if (messages.length <= MESSAGE_VIRTUALIZATION_THRESHOLD) {
+      // Under threshold, show all messages
+      return messages;
+    }
+    
+    // Over threshold, show only the most recent messages plus buffer
+    const startIndex = Math.max(0, messages.length - MESSAGE_VIRTUALIZATION_THRESHOLD - VISIBLE_MESSAGE_BUFFER);
+    return messages.slice(startIndex);
+  }, [messages]);
+  
+  // Calculate how many messages are hidden due to virtualization
+  const hiddenMessageCount = messages.length - visibleMessages.length;
 
   // Helper function to insert a message in timestamp-sorted order
   const insertMessageInOrder = (currentMessages: Message[], newMessage: Message): Message[] => {
@@ -221,7 +240,7 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
             initialAutoScrollPendingRef.current = false;
           }
         },
-        onToolCallAnnouncement: (_agentId: string, _sessionId: string, message: any) => {
+        onToolCallAnnouncement: (_agentId: string, _sessionId: string, _message: any) => {
           // Only show announcements for the current agent
           if (_agentId !== agentId) {
             return;
@@ -791,14 +810,28 @@ const AgentChat: React.FC<AgentChatProps> = ({ agentId, sessionId: propSessionId
                 <Text c="dimmed" mt="md">Start a conversation with the agent</Text>
               </Box>
             ) : (
-              messages.map((message) => (
-                <MessageDisplay
-                  key={message.id}
-                  message={message}
-                  isCollapsible={message.message_type === 'SYSTEM'}
-                  isCollapsed={message.message_type === 'SYSTEM'}
-                />
-              ))
+              <>
+                {hiddenMessageCount > 0 && (
+                  <Box ta="center" py="sm" style={{ 
+                    backgroundColor: 'var(--mantine-color-dark-7)', 
+                    borderRadius: '4px',
+                    border: '1px solid var(--mantine-color-dark-4)'
+                  }}>
+                    <Text size="sm" c="dimmed">
+                      {hiddenMessageCount} older messages hidden for performance. 
+                      Total: {messages.length} messages
+                    </Text>
+                  </Box>
+                )}
+                {visibleMessages.map((message) => (
+                  <MessageDisplay
+                    key={message.id}
+                    message={message}
+                    isCollapsible={message.message_type === 'SYSTEM'}
+                    isCollapsed={message.message_type === 'SYSTEM'}
+                  />
+                ))}
+              </>
             )}
             
             {isLoading && (

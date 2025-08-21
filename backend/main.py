@@ -5,7 +5,7 @@ import logging
 import traceback
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -80,6 +80,197 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0"
     }
+
+# Authentication helper for streaming endpoints
+def validate_stream_access(guid: str, request: Request) -> bool:
+    """Validate access to a stream - basic session-based validation"""
+    # In a real implementation, this would validate session tokens, user permissions, etc.
+    # For now, we'll do basic validation
+    try:
+        # Validate GUID format
+        import re
+        guid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+        if not guid_pattern.match(guid):
+            return False
+        
+        # Check if stream exists and is accessible
+        # This would typically involve checking user permissions, session validity, etc.
+        return True
+    except Exception:
+        return False
+
+# Streaming endpoints
+@app.get("/api/message/{guid}/content")
+@monitor_performance("stream_message_content")
+async def stream_message_content(guid: str, request: Request):
+    """HTTP streaming endpoint for message content (Server-Sent Events)"""
+    from fastapi.responses import StreamingResponse
+    from schemas import StreamChunk, StreamChunkType, StreamState
+    from streaming_manager import streaming_manager, StreamPriority
+    import re
+    
+    # Validate access to the stream
+    if not validate_stream_access(guid, request):
+        # Return unauthorized error as SSE
+        async def unauthorized_stream():
+            error_chunk = StreamChunk(
+                chunk="Unauthorized access",
+                type=StreamChunkType.ERROR,
+                chunk_id=0,
+                error="Unauthorized access to stream"
+            )
+            yield f"data: {error_chunk.model_dump_json()}\n\n"
+        
+        return StreamingResponse(
+            unauthorized_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+    
+    # Validate GUID format
+    guid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+    if not guid_pattern.match(guid):
+        # Return error as SSE
+        async def error_stream():
+            error_chunk = StreamChunk(
+                chunk="Invalid GUID format",
+                type=StreamChunkType.ERROR,
+                chunk_id=0,
+                error="Invalid GUID format"
+            )
+            yield f"data: {error_chunk.model_dump_json()}\n\n"
+        
+        return StreamingResponse(
+            error_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+    
+    # Get stream info
+    stream_info = await streaming_manager.get_stream_info(guid)
+    if not stream_info:
+        # Return error as SSE
+        async def error_stream():
+            error_chunk = StreamChunk(
+                chunk="Stream not found",
+                type=StreamChunkType.ERROR,
+                chunk_id=0,
+                error="Stream not found"
+            )
+            yield f"data: {error_chunk.model_dump_json()}\n\n"
+        
+        return StreamingResponse(
+            error_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Headers": "*"
+            }
+        )
+    
+    # Start the stream if it's pending
+    if stream_info.state == StreamState.PENDING:
+        await streaming_manager.start_stream(guid)
+    
+    # Stream the content
+    async def stream_content():
+        try:
+            # Send progress chunk
+            progress_chunk = await streaming_manager.add_chunk(
+                guid, "Streaming content...", StreamChunkType.PROGRESS
+            )
+            if progress_chunk:
+                yield f"data: {progress_chunk.model_dump_json()}\n\n"
+            
+            # TODO: Implement actual content streaming logic
+            # For now, send placeholder content
+            content_chunk = await streaming_manager.add_chunk(
+                guid, "Content will be streamed here", StreamChunkType.CONTENT
+            )
+            if content_chunk:
+                yield f"data: {content_chunk.model_dump_json()}\n\n"
+            
+            # Complete the stream
+            await streaming_manager.complete_stream(guid)
+            complete_chunk = StreamChunk(
+                chunk="",
+                type=StreamChunkType.COMPLETE,
+                chunk_id=stream_info.chunk_id + 1
+            )
+            yield f"data: {complete_chunk.model_dump_json()}\n\n"
+            
+        except Exception as e:
+            # Error the stream
+            await streaming_manager.error_stream(guid, str(e))
+            error_chunk = StreamChunk(
+                chunk=str(e),
+                type=StreamChunkType.ERROR,
+                chunk_id=stream_info.chunk_id + 1,
+                error=str(e)
+            )
+            yield f"data: {error_chunk.model_dump_json()}\n\n"
+    
+    return StreamingResponse(
+        stream_content(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*"
+        }
+    )
+
+@app.post("/api/message/{guid}/cancel")
+@monitor_performance("cancel_message_stream")
+async def cancel_message_stream(guid: str, request: Request):
+    """Cancel an active message stream"""
+    from streaming_manager import streaming_manager
+    
+    # Validate access to the stream
+    if not validate_stream_access(guid, request):
+        raise HTTPException(status_code=403, detail="Unauthorized access to stream")
+    
+    success = await streaming_manager.cancel_stream(guid)
+    return {"status": "cancelled" if success else "not_found", "guid": guid}
+
+@app.post("/api/message/{guid}/pause")
+@monitor_performance("pause_message_stream")
+async def pause_message_stream(guid: str, request: Request):
+    """Pause an active message stream"""
+    from streaming_manager import streaming_manager
+    
+    # Validate access to the stream
+    if not validate_stream_access(guid, request):
+        raise HTTPException(status_code=403, detail="Unauthorized access to stream")
+    
+    success = await streaming_manager.pause_stream(guid)
+    return {"status": "paused" if success else "not_found", "guid": guid}
+
+@app.post("/api/message/{guid}/resume")
+@monitor_performance("resume_message_stream")
+async def resume_message_stream(guid: str, request: Request):
+    """Resume a paused message stream"""
+    from streaming_manager import streaming_manager
+    
+    # Validate access to the stream
+    if not validate_stream_access(guid, request):
+        raise HTTPException(status_code=403, detail="Unauthorized access to stream")
+    
+    success = await streaming_manager.resume_stream(guid)
+    return {"status": "resumed" if success else "not_found", "guid": guid}
 
 # WebSocket endpoints
 @app.websocket("/ws/frontend-api")

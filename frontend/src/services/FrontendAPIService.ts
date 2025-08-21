@@ -6,7 +6,7 @@
 import { connectionManager } from './ConnectionManager';
 
 export interface FrontendAPIMessage {
-  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_call_announcement' | 'tool_call_announcement' | 'AGENT_CALL' | 'AGENT_DELEGATE' | 'TOOL_CALL' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors';
+  type: 'system_message' | 'agent_response' | 'agent_stream_start' | 'agent_stream' | 'seed_message' | 'error' | 'context_update' | 'notification' | 'agent_call_announcement' | 'tool_call_announcement' | 'AGENT_CALL' | 'AGENT_DELEGATE' | 'TOOL_CALL' | 'agent_list_update' | 'tool_update' | 'prompt_update' | 'provider_update' | 'model_update' | 'schema_update' | 'session_created' | 'conversation_snapshot' | 'conversation_list' | 'monitoring_health' | 'monitoring_metrics' | 'monitoring_errors' | 'REQUEST_CONTENT' | 'STREAM_STARTED' | 'STREAM_COMPLETE' | 'STREAM_ERROR';
   message_id: string;
   timestamp: string;
   agent_id?: string;
@@ -45,6 +45,10 @@ export interface FrontendAPIHandlers {
   onMonitoringHealth?: (data: any) => void;
   onMonitoringMetrics?: (data: any) => void;
   onMonitoringErrors?: (data: any) => void;
+  // New streaming handlers
+  onStreamStarted?: (guid: string, agentId: string, sessionId: string) => void;
+  onStreamComplete?: (guid: string, agentId: string, sessionId: string) => void;
+  onStreamError?: (guid: string, agentId: string, sessionId: string, error: string) => void;
 }
 
 export class FrontendAPIService {
@@ -346,6 +350,29 @@ export class FrontendAPIService {
       case 'monitoring_errors':
         if (this.handlers.onMonitoringErrors) {
           this.handlers.onMonitoringErrors(message.data);
+        }
+        break;
+
+      // New streaming message handlers
+      case 'STREAM_STARTED':
+        console.log('📥 [Frontend] Processing STREAM_STARTED for agent:', message.agent_id);
+        if (this.handlers.onStreamStarted && message.agent_id && message.data?.message_id) {
+          this.handlers.onStreamStarted(message.data.message_id, message.agent_id, sessionId);
+        }
+        break;
+
+      case 'STREAM_COMPLETE':
+        console.log('📥 [Frontend] Processing STREAM_COMPLETE for agent:', message.agent_id);
+        if (this.handlers.onStreamComplete && message.agent_id && message.data?.message_id) {
+          this.handlers.onStreamComplete(message.data.message_id, message.agent_id, sessionId);
+        }
+        break;
+
+      case 'STREAM_ERROR':
+        console.log('📥 [Frontend] Processing STREAM_ERROR for agent:', message.agent_id);
+        if (this.handlers.onStreamError && message.agent_id && message.data?.message_id) {
+          const error = message.data?.error || 'Unknown stream error';
+          this.handlers.onStreamError(message.data.message_id, message.agent_id, sessionId, error);
         }
         break;
 

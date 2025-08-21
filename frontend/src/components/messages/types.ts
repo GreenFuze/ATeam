@@ -9,6 +9,7 @@ export interface BaseMessageDisplayProps {
   isCollapsed?: boolean;
   onSave?: (content: string) => void;
   onCancel?: () => void;
+  sessionId?: string; // For streaming support
 }
 
 export interface MessageDisplayComponent {

@@ -3,7 +3,6 @@ import { Message, MessageType } from '../../types';
 import { BaseMessageDisplayProps } from './types';
 import { SystemMessageDisplay } from './SystemMessageDisplay';
 import { ToolCallMessageDisplay } from './tools/ToolCallMessageDisplay';
-import { ToolReturnMessageDisplay } from './tools/ToolReturnMessageDisplay';
 import { DelegatingAgentMessageDisplay } from './agents/DelegatingAgentMessageDisplay';
 import { DelegatedAgentMessageDisplay } from './agents/DelegatedAgentMessageDisplay';
 import { CallingAgentMessageDisplay } from './agents/CallingAgentMessageDisplay';
@@ -32,9 +31,10 @@ export class MessageDisplayFactory {
       return ToolCallMessageDisplay;
     }
     
-    if (message.message_type === MessageType.TOOL_RETURN) {
-      return ToolReturnMessageDisplay;
-    }
+    // TOOL_RETURN messages are no longer displayed separately - they are handled within TOOL_CALL
+    // if (message.message_type === MessageType.TOOL_RETURN) {
+    //   return ToolReturnMessageDisplay;
+    // }
     
     // Agent orchestration messages
     if (message.message_type === MessageType.AGENT_DELEGATE) {

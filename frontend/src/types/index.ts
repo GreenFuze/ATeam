@@ -9,7 +9,10 @@ export enum MessageType {
   AGENT_DELEGATE = "AGENT_DELEGATE",
   REFINEMENT_RESPONSE = "REFINEMENT_RESPONSE",
   SYSTEM = "SYSTEM",
-  ERROR = "ERROR"
+  ERROR = "ERROR",
+  // New streaming message types
+  SYSTEM_MESSAGE = "SYSTEM_MESSAGE",
+  ERROR_RESPONSE = "ERROR_RESPONSE"
 }
 
 export enum PromptType {
@@ -161,6 +164,10 @@ export interface Message {
   agent_result?: string;
   action?: string;
   reasoning?: string;
+  // Streaming support
+  stream_id?: string; // GUID for streaming content
+  stream_state?: 'PENDING' | 'STREAMING' | 'COMPLETE' | 'ERROR';
+  is_streaming?: boolean; // Flag to indicate if content is being streamed
 }
 
 export interface ChatSession {

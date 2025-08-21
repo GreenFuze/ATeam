@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from embedding_manager import EmbeddingManager
     from kb_manager import KBManager
+    from streaming_manager import StreamingManager
 
 # Global manager instances
 _agent_manager: AgentManager | None = None
@@ -30,10 +31,11 @@ _notification_manager: NotificationManager | None = None
 _frontend_api: FrontendAPI | None = None
 _embedding_manager = None  # type: ignore[assignment]
 _kb_manager = None  # type: ignore[assignment]
+_streaming_manager = None  # type: ignore[assignment]
 
 def initialize_managers():
     """Initialize all global manager instances"""
-    global _agent_manager, _tool_manager, _prompt_manager, _provider_manager, _models_manager, _schema_manager, _notification_manager, _frontend_api, _embedding_manager, _kb_manager
+    global _agent_manager, _tool_manager, _prompt_manager, _provider_manager, _models_manager, _schema_manager, _notification_manager, _frontend_api, _embedding_manager, _kb_manager, _streaming_manager
     
     # Initialize managers in dependency order
     _tool_manager = ToolManager("tools/tools")
@@ -47,8 +49,10 @@ def initialize_managers():
     # Import lazily to avoid circular import errors
     from embedding_manager import EmbeddingManager as _EM
     from kb_manager import KBManager as _KM
+    from streaming_manager import StreamingManager as _SM
     _embedding_manager = _EM("embedding.yaml")
     _kb_manager = _KM(base_dir="knowledgebase")
+    _streaming_manager = _SM()
 
 def get_agent_manager() -> AgentManager:
     """Get the global agent manager instance"""
@@ -97,6 +101,12 @@ def get_frontend_api() -> FrontendAPI:
     if _frontend_api is None:
         raise RuntimeError("Managers not initialized. Call initialize_managers() first.")
     return _frontend_api
+
+def get_streaming_manager():
+    """Get the global streaming manager instance"""
+    if _streaming_manager is None:
+        raise RuntimeError("Managers not initialized. Call initialize_managers() first.")
+    return _streaming_manager
 
 def get_embedding_manager():
     if _embedding_manager is None:

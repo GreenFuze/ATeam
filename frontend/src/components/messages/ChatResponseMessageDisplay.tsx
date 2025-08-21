@@ -1,9 +1,10 @@
 
+import React from 'react';
 import { Badge } from '@mantine/core';
 import { IconBrain } from '@tabler/icons-react';
 import { BaseMessageDisplay } from './BaseMessageDisplay';
 
-export class ChatResponseMessageDisplay extends BaseMessageDisplay {
+class ChatResponseMessageDisplayClass extends BaseMessageDisplay {
   getIcon(): JSX.Element {
     return <IconBrain size={16} />;
   }
@@ -42,6 +43,9 @@ export class ChatResponseMessageDisplay extends BaseMessageDisplay {
       );
     }
 
+    // Add streaming badges
+    badges.push(...this.getStreamingBadges());
+
     return badges;
   }
 
@@ -60,3 +64,6 @@ export class ChatResponseMessageDisplay extends BaseMessageDisplay {
     );
   }
 }
+
+// Memoized export for performance optimization
+export const ChatResponseMessageDisplay = React.memo(ChatResponseMessageDisplayClass);

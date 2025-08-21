@@ -24,7 +24,7 @@ from schemas import (
     StructuredResponseType, ChatResponse, ToolCallResponse, ToolReturnResponse,
     AgentDelegateResponse, AgentCallResponse, AgentReturnResponse, AgentOrchestrationFailedResponse, RefinementResponse,
     UnknownActionError, SessionRef, MessageHistory, PromptType, OperationType,
-    ErrorChatResponse,
+    ErrorChatResponse, StreamState, StreamChunkType,
 )
 from notification_utils import log_error, log_warning, log_info
 from tools.tool_executor import ToolRunner
@@ -535,9 +535,10 @@ class Agent:
     
 
     async def _handle_tool_call(self, response: ToolCallResponse) -> None:
-        """Handle tool call - execute tool and continue conversation"""
-        from objects_registry import frontend_api, tool_manager
+        """Handle tool call - execute tool and continue conversation with streaming"""
+        from objects_registry import frontend_api, tool_manager, get_streaming_manager
         from llm_auto_reply_prompts import LLMAutoReplyPrompts
+        from streaming_manager import StreamPriority
         
         # Validate tool exists
         if not tool_manager().is_tool_available(response.tool):
@@ -561,38 +562,65 @@ class Agent:
         
         logger.info(f"🛠️ TOOL_CALL {self.id} -> {response.tool} args={args_with_caller}")
         
-        # Send tool call announcement and tool call details in one call
-        await frontend_api().send_to_agent(self.session_ref).tool_call_announcement(
-            response.to_ui(),
+        # Create streaming context for tool execution
+        stream_guid = await get_streaming_manager().create_stream(self.id, StreamPriority.HIGH)
+        
+        # Create streaming tool call response with GUID
+        streaming_tool_call = response.to_ui()
+        streaming_tool_call.id = stream_guid  # Set the stream GUID
+        streaming_tool_call.stream_state = StreamState.PENDING
+        
+        # Send streaming tool call to frontend (shell only)
+        await frontend_api().send_to_agent(self.session_ref).send_agent_response_to_frontend(
+            streaming_tool_call,
             self._calculate_context_usage(),
         )
         
-        # Execute the tool
-        tool_result = self._tool_runner.run_tool(response.tool, args_with_caller)
-
-        # Create proper tool return response and add to conversation
-        tool_return_response = ToolReturnResponse.create(
-            tool=response.tool,
-            result=tool_result.result,
-            success=True,
-            reasoning=f"Tool {response.tool} executed successfully",
-            agent=self
-        )
-        tool_ui_response = tool_return_response.to_ui()
-        self.history.append_llm_response(tool_ui_response)
-
-        # Log TOOL_RETURN for consistency
-        logger.info(f"🔍 INFO: Raw LLM response for agent {self.id}: {json.dumps(tool_ui_response.dict(), indent=2)}")
-
-        # Emit TOOL_RETURN to frontend as a separate message (fail-fast)
-        context_usage = self._calculate_context_usage()
-        await frontend_api().send_to_agent(self.session_ref).send_agent_response_to_frontend(
-            tool_ui_response,
-            context_usage,
-        )
+        # Start the stream
+        await get_streaming_manager().start_stream(stream_guid)
         
-        # Schedule continuation with tool result
-        self._schedule(self.send_to_llm(f"Tool {response.tool} returned: {tool_result.result}"))
+        # Stream tool execution progress
+        await get_streaming_manager().add_chunk(stream_guid, f"Executing tool: {response.tool}", StreamChunkType.PROGRESS)
+        
+        try:
+            # Execute the tool
+            tool_result = self._tool_runner.run_tool(response.tool, args_with_caller)
+            
+            # Stream the result
+            await get_streaming_manager().add_chunk(stream_guid, tool_result.result, StreamChunkType.CONTENT)
+            
+            # Complete the stream
+            await get_streaming_manager().complete_stream(stream_guid)
+            
+            # Create proper tool return response and add to conversation
+            tool_return_response = ToolReturnResponse.create(
+                tool=response.tool,
+                result=tool_result.result,
+                success=True,
+                reasoning=f"Tool {response.tool} executed successfully",
+                agent=self
+            )
+            
+            # Schedule continuation with tool result
+            self._schedule(self.send_to_llm(f"Tool {response.tool} returned: {tool_result.result}"))
+            
+        except Exception as e:
+            # Stream error and complete stream
+            error_msg = f"Tool execution failed: {str(e)}"
+            await get_streaming_manager().add_chunk(stream_guid, error_msg, StreamChunkType.ERROR)
+            await get_streaming_manager().error_stream(stream_guid, error_msg)
+            
+            # Create error tool return response
+            tool_return_response = ToolReturnResponse.create(
+                tool=response.tool,
+                result=error_msg,
+                success=False,
+                reasoning=f"Tool {response.tool} execution failed: {str(e)}",
+                agent=self
+            )
+            
+            # Schedule error feedback to LLM for recovery
+            self._schedule(self.send_to_llm(f"Error: {error_msg}. {LLMAutoReplyPrompts.RECOVERY_INSTRUCTION}"))
     
         
     async def _send_llm_response_to_ui(self, llm_response: UILLMResponse) -> None:

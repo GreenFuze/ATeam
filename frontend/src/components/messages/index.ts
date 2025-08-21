@@ -7,7 +7,7 @@ export { BaseMessageDisplay } from './BaseMessageDisplay';
 // Tool components
 export { ToolBaseMessageDisplay } from './tools/ToolBaseMessageDisplay';
 export { ToolCallMessageDisplay } from './tools/ToolCallMessageDisplay';
-export { ToolReturnMessageDisplay } from './tools/ToolReturnMessageDisplay';
+// ToolReturnMessageDisplay removed - now handled within ToolCallMessageDisplay
 
 // Agent orchestration components
 export { AgentOrchestrationBaseMessageDisplay } from './agents/AgentOrchestrationBaseMessageDisplay';

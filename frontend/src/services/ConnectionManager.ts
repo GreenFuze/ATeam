@@ -6,6 +6,7 @@
 import { frontendAPIService, FrontendAPIHandlers } from './FrontendAPIService';
 import { backendAPIService } from './BackendAPIService';
 import { Message } from '../types';
+import { streamingClient, StreamCallbacks } from './StreamingClient';
 
 export interface ConnectionStatus {
   frontendAPI: boolean;
@@ -57,6 +58,84 @@ export class ConnectionManager {
     setInterval(() => {
       this.updateStatus();
     }, 1000); // Check every second
+
+    // Set up WebSocket reconnection handlers
+    this.setupReconnectionHandlers();
+  }
+
+  private setupReconnectionHandlers(): void {
+    // Handle WebSocket reconnection events
+    const originalOnConnectionLost = this.callbacks.onConnectionLost;
+    const originalOnConnectionRestored = this.callbacks.onConnectionRestored;
+
+    this.callbacks.onConnectionLost = () => {
+      console.log('🔄 [ConnectionManager] WebSocket connection lost, handling stream recovery...');
+      
+      // Clean up all active streams on connection loss
+      streamingClient.cleanupAllStreams();
+      
+      // Call original callback
+      if (originalOnConnectionLost) {
+        originalOnConnectionLost();
+      }
+    };
+
+    this.callbacks.onConnectionRestored = () => {
+      console.log('✅ [ConnectionManager] WebSocket connection restored, attempting stream recovery...');
+      
+      // Attempt to recover streams that were active before disconnection
+      this.attemptStreamRecovery();
+      
+      // Call original callback
+      if (originalOnConnectionRestored) {
+        originalOnConnectionRestored();
+      }
+    };
+  }
+
+  private async attemptStreamRecovery(): Promise<void> {
+    try {
+      // Get all active streams that need recovery
+      const activeStreams = streamingClient.getActiveStreams();
+      
+      for (const [streamId, streamInfo] of activeStreams.entries()) {
+        if (streamInfo.state === 'connecting' || streamInfo.state === 'streaming') {
+          console.log(`🔄 [ConnectionManager] Attempting to recover stream: ${streamId}`);
+          
+          // Attempt to reconnect to the stream with exponential backoff
+          await this.retryStreamConnection(streamId, streamInfo);
+        }
+      }
+    } catch (error) {
+      console.error('❌ [ConnectionManager] Error during stream recovery:', error);
+    }
+  }
+
+  private async retryStreamConnection(streamId: string, streamInfo: any, attempt: number = 1): Promise<void> {
+    const maxAttempts = 3;
+    const baseDelay = 1000; // 1 second base delay
+    
+    try {
+      // Attempt to reconnect to the stream
+      await streamingClient.reconnectStream(streamId);
+      console.log(`✅ [ConnectionManager] Successfully recovered stream: ${streamId}`);
+    } catch (error) {
+      console.warn(`⚠️ [ConnectionManager] Stream recovery attempt ${attempt} failed for ${streamId}:`, error);
+      
+      if (attempt < maxAttempts) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        console.log(`⏳ [ConnectionManager] Retrying stream ${streamId} in ${delay}ms (attempt ${attempt + 1}/${maxAttempts})`);
+        
+        setTimeout(() => {
+          this.retryStreamConnection(streamId, streamInfo, attempt + 1);
+        }, delay);
+      } else {
+        console.error(`❌ [ConnectionManager] Failed to recover stream ${streamId} after ${maxAttempts} attempts`);
+        // Mark stream as failed
+        streamingClient.markStreamAsFailed(streamId, 'Failed to recover after reconnection');
+      }
+    }
   }
 
   public async connect(): Promise<void> {
@@ -319,6 +398,45 @@ export class ConnectionManager {
 
   public clearContext(agentId: string): void {
     delete this.contextByAgent[agentId];
+  }
+
+  // Streaming methods
+  public async startContentStream(
+    guid: string,
+    agentId: string,
+    sessionId: string,
+    callbacks: StreamCallbacks,
+    priority: 'high' | 'low' = 'low'
+  ): Promise<boolean> {
+    return streamingClient.startStream(guid, agentId, sessionId, callbacks, priority);
+  }
+
+  public async cancelContentStream(guid: string): Promise<boolean> {
+    return streamingClient.cancelStream(guid);
+  }
+
+  public async pauseContentStream(guid: string): Promise<boolean> {
+    return streamingClient.pauseStream(guid);
+  }
+
+  public async resumeContentStream(guid: string): Promise<boolean> {
+    return streamingClient.resumeStream(guid);
+  }
+
+  public getStreamState(guid: string) {
+    return streamingClient.getStreamState(guid);
+  }
+
+  public getActiveStreams() {
+    return streamingClient.getActiveStreams();
+  }
+
+  public cleanupAgentStreams(agentId: string): void {
+    streamingClient.cleanupAgentStreams(agentId);
+  }
+
+  public getStreamingStats() {
+    return streamingClient.getStats();
   }
 
   public sendCreateAgent(agentData: any): void {
