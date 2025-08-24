@@ -1,3 +1,5 @@
+# THIS IS STILL A CONCEPT IN RESEARCH - Not really working
+
 # ATeam - Pure CLI Multi-Agent System
 
 A powerful, pure command-line multi-agent system with Redis-backed MCP (Model Context Protocol), explicit control, and fail-fast design principles.
