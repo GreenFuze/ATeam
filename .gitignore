@@ -124,18 +124,6 @@ dmypy.json
 .pyre/
 
 .vscode/
-backend/static*
-frontend/node_modules*
-
-backend/knowledgebase/**
-
-backend/history/*
-backend/knowledgebase/*
-prompts/
-backend/prompts/*
-!backend/prompts/how_to_respond_no_schema_or_grammar.md
-!backend/prompts/zeus_agent.md
-!backend/knowledgebase/.gitkeep
-!backend/prompts/summary_request.md
-!backend/prompts/all_agents.md
-!backend/prompts/use_knowledgebase.md
+backend/*
+frontend/*
+agents_lab/*

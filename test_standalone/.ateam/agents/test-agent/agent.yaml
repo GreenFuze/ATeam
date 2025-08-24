@@ -1,0 +1,4 @@
+name: test-agent
+prompt:
+  base: "You are a helpful AI assistant."
+model: echo-test

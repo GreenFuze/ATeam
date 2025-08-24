@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis-ateam
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Production settings with persistence
+    volumes:
+      - redis_data:/data
+    command: [
+      "redis-server",
+      "--appendonly", "yes",
+      "--maxmemory", "256mb",
+      "--maxmemory-policy", "allkeys-lru",
+      "--save", "900", "1",
+      "--save", "300", "10",
+      "--save", "60", "10000"
+    ]
+    
+    # Optional: Add password for production
+    # command: [
+    #   "redis-server",
+    #   "--appendonly", "yes",
+    #   "--requirepass", "${REDIS_PASSWORD}",
+    #   "--maxmemory", "256mb",
+    #   "--maxmemory-policy", "allkeys-lru"
+    # ]
+
+volumes:
+  redis_data:
+    driver: local

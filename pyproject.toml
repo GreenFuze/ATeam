@@ -1,0 +1,42 @@
+[build-system]
+requires = ["flit_core>=3.9"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "ateam"
+version = "0.1.0a1"
+description = "A pure-CLI multi-agent system with Redis-backed MCP and explicit control."
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name="Tsvi", email="example@example.com" }]
+license = { text = "Apache-2.0" }
+dependencies = [
+  "typer>=0.16.1",
+  "redis>=6.4.0",
+  "msgpack>=1.1.1",
+  "prompt-toolkit>=3.0.51",
+  "pydantic>=2.11.7",
+  "pyyaml>=6.0.2",
+  "portalocker>=3.2.0"
+]
+
+[project.optional-dependencies]
+ui = ["rich>=13.7", "textual>=0.58"]
+dev = ["pytest","mypy","ruff","types-redis","prometheus-client"]
+
+[project.urls]
+Homepage = "https://github.com/GreenFuze/ATeam"
+
+[project.scripts]
+ateam = "ateam.cli:main"
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","I","UP","ASYNC","ANN"]
+target-version = "py39"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = "ateam"
+packages = ["ateam"]
